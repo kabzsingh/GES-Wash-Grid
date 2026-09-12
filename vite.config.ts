@@ -1,16 +1,54 @@
-import { defineConfig } from "@lovable.dev/vite-tanstack-config";
+import { defineConfig, loadEnv } from "vite";
+import { tanstackStart } from "@tanstack/react-start/plugin/vite";
+import { nitro } from "nitro/vite";
+import viteReact from "@vitejs/plugin-react";
 
-export default defineConfig({
-  tanstackStart: {
-    routesDirectory: "./src/routes",
-    generatedRouteTree: "./src/routeTree.gen.ts",
-  },
-  nitro: { preset: "vercel" },
-  vite: {
+export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, process.cwd(), "VITE_");
+  const envDefine: Record<string, string> = {};
+  for (const [key, value] of Object.entries(env)) {
+    envDefine[`import.meta.env.${key}`] = JSON.stringify(value);
+  }
+
+  return {
+    define: envDefine,
+    resolve: {
+      alias: {
+        "@": `${process.cwd()}/src`,
+      },
+      dedupe: [
+        "react",
+        "react-dom",
+        "react/jsx-runtime",
+        "react/jsx-dev-runtime",
+        "@tanstack/react-query",
+        "@tanstack/query-core",
+      ],
+    },
+    plugins: [
+      tanstackStart({
+        routesDirectory: "./src/routes",
+        generatedRouteTree: "./src/routeTree.gen.ts",
+        importProtection: {
+          behavior: "error",
+          client: {
+            files: ["**/server/**"],
+            specifiers: ["server-only"],
+          },
+        },
+      }),
+      // No preset override here — let Nitro use its own native Vercel
+      // output convention (.vercel/output) rather than the non-standard
+      // 'dist' path the @lovable.dev preset forced, which produced valid
+      // Vercel function artifacts but not at the path Vercel's build
+      // system actually looks for, resulting in a 404 despite a "Ready" build.
+      nitro({ preset: "vercel" }),
+      viteReact(),
+    ],
     server: {
       host: "0.0.0.0",
       port: 5000,
       allowedHosts: true,
     },
-  },
+  };
 });

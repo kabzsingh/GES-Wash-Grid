@@ -1,0 +1,1 @@
+function a(){return"https://lbrpxdlgloudnywdlzdi.supabase.co".match(/https:\/\/([^.]+)\.supabase\.co/)?.[1]??null}function e(){const t=a();return t?`https://supabase.com/dashboard/project/${t}/editor`:null}export{a,e as g};
