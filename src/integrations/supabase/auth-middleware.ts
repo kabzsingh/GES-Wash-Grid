@@ -15,9 +15,12 @@ export const requireSupabaseAuth = createMiddleware({ type: 'function' }).server
       global: { headers: { Authorization: `Bearer ${token}` } },
       auth: { storage: undefined, persistSession: false, autoRefreshToken: false },
     });
-    const { data: claimsData, error } = await supabase.auth.getClaims(token);
-    if (error || !claimsData?.claims) throw new Error('Unauthorized: Invalid or expired session');
-    if (!claimsData.claims.sub) throw new Error('Unauthorized: No user ID in token');
-    return next({ context: { supabase, userId: claimsData.claims.sub, claims: claimsData.claims } });
+    // getUser() calls Supabase Auth's /user endpoint directly with the given
+    // token — more universally compatible than getClaims(), which verifies
+    // JWTs via the project's configured signing-key setup and can behave
+    // differently across projects depending on that configuration.
+    const { data: userData, error } = await supabase.auth.getUser(token);
+    if (error || !userData?.user) throw new Error('Unauthorized: Invalid or expired session');
+    return next({ context: { supabase, userId: userData.user.id, claims: userData.user } });
   },
 );
