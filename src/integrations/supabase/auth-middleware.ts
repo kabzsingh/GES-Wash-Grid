@@ -2,13 +2,18 @@ import { createMiddleware } from '@tanstack/react-start'
 import { createClient } from '@supabase/supabase-js'
 import type { Database } from './types'
 
-const FALLBACK_URL = "https://lbrpxdlgloudnywdlzdi.supabase.co";
-const FALLBACK_KEY = "sb_publishable_DCDr5jYe_QxV6Rdglz0JcQ_YAQ2D7M9";
+// Hardcoded intentionally, with no environment variable lookup at all —
+// these are the public-safe URL/key for the Finalfix Supabase project.
+// Environment variables in Vercel's dashboard (e.g. leftover from an
+// auto-connected integration pointing at a different/old project) were
+// silently overriding these and breaking auth entirely. Since these two
+// values are meant to be public anyway, hardcoding them removes any
+// possibility of that happening again.
+const SUPABASE_URL = "https://lbrpxdlgloudnywdlzdi.supabase.co";
+const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_DCDr5jYe_QxV6Rdglz0JcQ_YAQ2D7M9";
 
 export const requireSupabaseAuth = createMiddleware({ type: 'function' }).server(
   async ({ next, data }) => {
-    const SUPABASE_URL = (typeof process !== 'undefined' && (process.env?.SUPABASE_URL || process.env?.VITE_SUPABASE_URL)) || FALLBACK_URL;
-    const SUPABASE_PUBLISHABLE_KEY = (typeof process !== 'undefined' && (process.env?.SUPABASE_PUBLISHABLE_KEY || process.env?.SUPABASE_ANON_KEY || process.env?.VITE_SUPABASE_PUBLISHABLE_KEY)) || FALLBACK_KEY;
     const token = (data as any)?.__token as string | undefined;
     if (!token) throw new Error('This endpoint requires a valid Bearer token');
     const supabase = createClient<Database>(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {

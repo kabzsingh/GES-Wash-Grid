@@ -1,17 +1,12 @@
 import { createClient } from '@supabase/supabase-js';
 import type { Database } from './types';
 
+// Hardcoded intentionally — see auth-middleware.ts for why (a stale/wrong
+// Vercel dashboard environment variable was silently overriding these).
+const SUPABASE_URL = "https://lbrpxdlgloudnywdlzdi.supabase.co";
+const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_DCDr5jYe_QxV6Rdglz0JcQ_YAQ2D7M9";
+
 function createSupabaseClient() {
-  const SUPABASE_URL =
-    (import.meta.env.VITE_SUPABASE_URL as string | undefined) ||
-    (typeof process !== 'undefined' ? process.env.SUPABASE_URL : undefined) ||
-    "https://lbrpxdlgloudnywdlzdi.supabase.co";
-
-  const SUPABASE_PUBLISHABLE_KEY =
-    (import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY as string | undefined) ||
-    (typeof process !== 'undefined' ? process.env.SUPABASE_PUBLISHABLE_KEY : undefined) ||
-    "sb_publishable_DCDr5jYe_QxV6Rdglz0JcQ_YAQ2D7M9";
-
   return createClient<Database>(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
     auth: {
       storage: typeof window !== 'undefined' ? localStorage : undefined,
