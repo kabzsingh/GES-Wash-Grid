@@ -15,7 +15,6 @@ import { toast } from "sonner";
 import { createSiteApiKey, grantAdminBootstrap, getSmtpSettings, updateSmtpSettings, listAllUsers, setUserRole, deleteUser } from "@/lib/admin.functions";
 import { Copy, Plus, Trash2, KeyRound, Cpu, Mail, Send, Server, ShieldCheck, Loader2, AlertTriangle, Users, UserCheck, UserX, Building2, Save, Pencil, Palette } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
-import { previewTheme } from "@/lib/theme-context";
 
 import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
@@ -489,10 +488,12 @@ function AppThemePanel() {
     })();
   }, []);
 
-  // Live preview as the admin picks colors, before saving
-  useEffect(() => {
-    if (!loading) previewTheme(mode, primary, accent);
-  }, [primary, accent, mode, loading]);
+  // NOTE: previously used previewTheme() here to reskin the whole document
+  // live as the admin picks colors. Removed — it force-overrides every CSS
+  // variable globally, and mode changes here (e.g. picking "Dark" as the
+  // saved default) could visually conflict with the admin's own current
+  // light/dark view, producing hard-to-read partial states. A local swatch
+  // preview (below, in the JSX) shows the choice safely instead.
 
   const handleSave = async () => {
     setSaving(true);
@@ -563,6 +564,22 @@ function AppThemePanel() {
               />
               <Input value={accent} onChange={(e) => setAccent(e.target.value)} className="h-9 font-mono text-xs" />
             </div>
+          </div>
+        </div>
+
+        <div className="space-y-2">
+          <Label className="text-xs text-muted-foreground">Preview ({mode} mode)</Label>
+          <div
+            className="rounded-lg border p-4 flex items-center gap-3"
+            style={{
+              backgroundColor: mode === "dark" ? "#15181d" : "#ffffff",
+              borderColor: mode === "dark" ? "#2a2e35" : "#e5e7eb",
+              color: mode === "dark" ? "#f5f5f5" : "#111827",
+            }}
+          >
+            <span className="h-8 w-8 rounded-full border-2 border-current/20" style={{ backgroundColor: primary }} />
+            <span className="h-8 w-8 rounded-full border-2 border-current/20" style={{ backgroundColor: accent }} />
+            <span className="text-sm font-medium">This is what {mode} mode will look like</span>
           </div>
         </div>
 
