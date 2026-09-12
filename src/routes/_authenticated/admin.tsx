@@ -1133,37 +1133,50 @@ function SiteThemeSettings({
   onUpdateBranding: (branding: { primary_color: string; secondary_color: string; accent_color: string; logo_url: string | null; background_url: string | null }) => Promise<boolean>;
 }) {
   const defaults = { primary: "#5ad1e0", secondary: "#243b53", accent: "#2c8f9e" };
+
+  const presets = [
+    { name: "Ocean", primary: "#38bdf8", secondary: "#0f2942", accent: "#0ea5e9" },
+    { name: "Emerald", primary: "#34d399", secondary: "#0f2e26", accent: "#059669" },
+    { name: "Slate", primary: "#94a3b8", secondary: "#1e293b", accent: "#64748b" },
+    { name: "Amber", primary: "#fbbf24", secondary: "#2e2408", accent: "#d97706" },
+    { name: "Violet", primary: "#a78bfa", secondary: "#241a3d", accent: "#8b5cf6" },
+  ];
+
   const [primary, setPrimary] = useState(site.primary_color || defaults.primary);
   const [secondary, setSecondary] = useState(site.secondary_color || defaults.secondary);
   const [accent, setAccent] = useState(site.accent_color || defaults.accent);
   const [saving, setSaving] = useState(false);
 
-  const save = async () => {
+  const persist = async (p: string, s: string, a: string) => {
     setSaving(true);
-    const ok = await onUpdateBranding({
-      primary_color: primary,
-      secondary_color: secondary,
-      accent_color: accent,
+    await onUpdateBranding({
+      primary_color: p,
+      secondary_color: s,
+      accent_color: a,
       logo_url: (site as any).logo_url ?? null,
       background_url: (site as any).background_url ?? null,
     });
     setSaving(false);
   };
 
-  const reset = async () => {
+  const save = () => persist(primary, secondary, accent);
+
+  const reset = () => {
     setPrimary(defaults.primary);
     setSecondary(defaults.secondary);
     setAccent(defaults.accent);
-    setSaving(true);
-    await onUpdateBranding({
-      primary_color: defaults.primary,
-      secondary_color: defaults.secondary,
-      accent_color: defaults.accent,
-      logo_url: (site as any).logo_url ?? null,
-      background_url: (site as any).background_url ?? null,
-    });
-    setSaving(false);
+    persist(defaults.primary, defaults.secondary, defaults.accent);
   };
+
+  const applyPreset = (preset: (typeof presets)[number]) => {
+    setPrimary(preset.primary);
+    setSecondary(preset.secondary);
+    setAccent(preset.accent);
+    persist(preset.primary, preset.secondary, preset.accent);
+  };
+
+  const isActivePreset = (preset: (typeof presets)[number]) =>
+    preset.primary === primary && preset.secondary === secondary && preset.accent === accent;
 
   const ColorField = ({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) => (
     <div className="space-y-1">
@@ -1210,10 +1223,51 @@ function SiteThemeSettings({
         </div>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 max-w-xl">
-        <ColorField label="Primary" value={primary} onChange={setPrimary} />
-        <ColorField label="Secondary" value={secondary} onChange={setSecondary} />
-        <ColorField label="Accent" value={accent} onChange={setAccent} />
+      <div className="mb-5">
+        <Label className="text-[10px] block mb-2">Quick Themes</Label>
+        <div className="flex flex-wrap gap-3">
+          {presets.map((preset) => (
+            <button
+              key={preset.name}
+              type="button"
+              onClick={() => applyPreset(preset)}
+              disabled={saving}
+              title={preset.name}
+              className={`group flex flex-col items-center gap-1.5 rounded-lg border p-2 transition-all ${
+                isActivePreset(preset)
+                  ? "border-primary ring-2 ring-primary/40 bg-primary/5"
+                  : "border-border/60 hover:border-border hover:bg-muted/40"
+              }`}
+            >
+              <div className="flex -space-x-1.5">
+                <span
+                  className="h-6 w-6 rounded-full border-2 border-card shadow-sm"
+                  style={{ backgroundColor: preset.primary }}
+                />
+                <span
+                  className="h-6 w-6 rounded-full border-2 border-card shadow-sm"
+                  style={{ backgroundColor: preset.accent }}
+                />
+                <span
+                  className="h-6 w-6 rounded-full border-2 border-card shadow-sm"
+                  style={{ backgroundColor: preset.secondary }}
+                />
+              </div>
+              <span className="text-[10px] font-semibold text-muted-foreground group-hover:text-foreground">
+                {preset.name}
+              </span>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div>
+        <Label className="text-[10px] block mb-2">Custom Colors</Label>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 max-w-xl">
+          <ColorField label="Primary" value={primary} onChange={setPrimary} />
+          <ColorField label="Secondary" value={secondary} onChange={setSecondary} />
+          <ColorField label="Accent" value={accent} onChange={setAccent} />
+        </div>
       </div>
     </div>
   );
