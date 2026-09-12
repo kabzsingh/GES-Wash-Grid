@@ -161,6 +161,18 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     let cancelled = false;
 
+    // Apply a sensible default IMMEDIATELY (synchronously, before the
+    // network round-trip below) so the page is never stuck showing
+    // completely unstyled content if the app_settings fetch is slow,
+    // fails, or the promise never resolves for any reason. The async
+    // fetch below then refines this with the admin's actual saved
+    // colors/mode once it completes — a harmless correction, not a
+    // requirement for the page to look right in the meantime.
+    const savedTheme = (localStorage.getItem("app-theme") as Theme | null) || "dark";
+    setThemeState(savedTheme);
+    applyTheme(savedTheme, DEFAULT_PRIMARY, DEFAULT_ACCENT);
+    setMounted(true);
+
     (async () => {
       // Fetch the admin-configured global default (mode + brand colors).
       // A user's own saved preference (localStorage) always wins for
@@ -177,12 +189,11 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
       const accent = data?.accent_color || DEFAULT_ACCENT;
       brandRef.current = { primary, accent };
 
-      const savedTheme = localStorage.getItem("app-theme") as Theme | null;
-      const initialTheme = savedTheme || (data?.theme_mode as Theme | undefined) || "dark";
+      const savedThemeChoice = localStorage.getItem("app-theme") as Theme | null;
+      const resolvedTheme = savedThemeChoice || (data?.theme_mode as Theme | undefined) || "dark";
 
-      setThemeState(initialTheme);
-      applyTheme(initialTheme, primary, accent);
-      setMounted(true);
+      setThemeState(resolvedTheme);
+      applyTheme(resolvedTheme, primary, accent);
     })();
 
     return () => {
