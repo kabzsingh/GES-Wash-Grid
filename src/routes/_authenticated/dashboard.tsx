@@ -1,0 +1,434 @@
+import { createFileRoute } from "@tanstack/react-router";
+import { useEffect, useState } from "react";
+import { supabase } from "@/integrations/supabase/client";
+import { useAuth } from "@/lib/auth-context";
+import { Activity, AlertTriangle, Droplets, Gauge, Radio, TrendingUp, MapPin, Loader2 } from "lucide-react";
+import { Link } from "@tanstack/react-router";
+import { ThemeToggle } from "@/components/app/ThemeToggle";
+
+export const Route = createFileRoute("/_authenticated/dashboard")({
+  component: DashboardPage,
+});
+
+interface SiteMetric {
+  id: string;
+  name: string;
+  location: string | null;
+  machine_type?: string | null;
+  primary_color?: string | null;
+  secondary_color?: string | null;
+  accent_color?: string | null;
+  logo_url: string | null;
+  online: boolean;
+  wash_today: number;
+  wash_total: number;
+  fresh_today: number;
+  fresh_total: number;
+  chemicals_total: number;
+  chemicals_low: number;
+  is_new_today: boolean;
+  fresh_water_alert: boolean;
+  avg_water_per_car: number | null;
+}
+
+function DashboardPage() {
+  const { user, loading: authLoading } = useAuth();
+  const [sites, setSites] = useState<SiteMetric[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (authLoading) return;
+    loadDashboard();
+  }, [authLoading]);
+
+  const loadDashboard = async () => {
+    try {
+      // Check if user is admin
+      const { data: adminCheck } = await supabase
+        .from("user_roles")
+        .select("role")
+        .eq("user_id", user?.id)
+        .eq("role", "admin")
+        .single();
+
+      let siteIds: string[] = [];
+
+      if (adminCheck) {
+        // Admin: get all sites
+        const { data: allSites } = await supabase
+          .from("sites")
+          .select("id");
+        siteIds = (allSites || []).map((s: any) => s.id);
+      } else {
+        // Regular user: get sites they have access to, either as an
+        // assigned operator (site_operators) or via direct access
+        // grants (user_access) — a user can appear in either table.
+        const [{ data: operatorSites }, { data: userSites }] = await Promise.all([
+          supabase.from("site_operators").select("site_id").eq("user_id", user?.id),
+          supabase.from("user_access").select("site_id").eq("user_id", user?.id),
+        ]);
+        const combined = new Set<string>([
+          ...((operatorSites || []).map((s: any) => s.site_id)),
+          ...((userSites || []).map((s: any) => s.site_id)),
+        ]);
+        siteIds = Array.from(combined);
+      }
+
+      if (siteIds.length === 0) {
+        setSites([]);
+        setLoading(false);
+        return;
+      }
+
+      const { data: sitesData } = await supabase
+        .from("sites")
+        .select("id, name, location, machine_type, logo_url, created_at, fresh_water_daily_threshold_liters, primary_color, secondary_color, accent_color")
+        .in("id", siteIds);
+
+      if (!sitesData) {
+        setSites([]);
+        setLoading(false);
+        return;
+      }
+
+      const metricsPromises = sitesData.map(async (site) => {
+        const todayMidnight = new Date();
+        todayMidnight.setHours(0, 0, 0, 0);
+        const midnightISO = todayMidnight.toISOString();
+        const isNewToday = new Date(site.created_at).getTime() >= todayMidnight.getTime();
+
+        // Get latest readings
+        const { data: latest } = await supabase
+          .from("readings")
+          .select("meter_id, value, recorded_at")
+          .eq("site_id", site.id)
+          .order("recorded_at", { ascending: false })
+          .limit(50);
+
+        // Get readings at midnight (to calculate daily delta)
+        const { data: midnightReadings } = await supabase
+          .from("readings")
+          .select("meter_id, value, recorded_at")
+          .eq("site_id", site.id)
+          .lte("recorded_at", midnightISO)
+          .order("recorded_at", { ascending: false })
+          .limit(100);
+
+        const { data: meters } = await supabase
+          .from("site_meters")
+          .select("id, meter_type, sensor_type, low_threshold, count_for_avg_water")
+          .eq("site_id", site.id);
+
+        // Active low events (topped_up_at IS NULL) are the persisted, debounced
+        // source of truth for switch/counter chemicals — NOT the latest raw
+        // reading, which can bounce (a float switch blip, a brief misread)
+        // and cause the status to flicker back to green on its own.
+        const { data: activeLowEvents } = await supabase
+          .from("chemical_low_events")
+          .select("meter_id")
+          .eq("site_id", site.id)
+          .is("topped_up_at", null);
+        const activeLowMeterIds = new Set((activeLowEvents ?? []).map((e: any) => e.meter_id));
+
+        let washToday = 0, washTotal = 0, freshToday = 0, freshTotal = 0, chemLow = 0, chemTotal = 0, avgWaterToday = 0;
+        let lastSeen = "";
+
+        const meterMap = new Map(meters?.map((m: any) => [m.id, m]) || []);
+        const latestByMeter = new Map<string, any>();
+        const midnightByMeter = new Map<string, any>();
+
+        // Get latest reading per meter
+        (latest || []).forEach((r: any) => {
+          if (!latestByMeter.has(r.meter_id)) {
+            latestByMeter.set(r.meter_id, r);
+          }
+          if (!lastSeen || r.recorded_at > lastSeen) lastSeen = r.recorded_at;
+        });
+
+        // Get midnight reading per meter (most recent before midnight)
+        (midnightReadings || []).forEach((r: any) => {
+          if (!midnightByMeter.has(r.meter_id)) {
+            midnightByMeter.set(r.meter_id, r);
+          }
+        });
+
+        // Calculate metrics
+        latestByMeter.forEach((latestReading, meterId) => {
+          const meter = meterMap.get(meterId);
+          if (!meter) return;
+
+          const latestValue = Number(latestReading.value);
+          const midnightValue = midnightByMeter.has(meterId) ? Number(midnightByMeter.get(meterId).value) : 0;
+
+          if (meter.meter_type === "wash") {
+            washTotal += latestValue;
+            washToday += Math.max(0, latestValue - midnightValue);
+          } else if (meter.meter_type === "fresh_water") {
+            const deltaToday = Math.max(0, latestValue - midnightValue);
+            freshToday += deltaToday;
+            freshTotal += latestValue;
+            if (meter.count_for_avg_water) avgWaterToday += deltaToday;
+          } else if (meter.meter_type === "chemical") {
+            chemTotal++;
+            if (meter.sensor_type === "probe") {
+              // Probe reports liters remaining in the drum — low when it
+              // drops below the configured threshold (e.g. under 20L). A
+              // continuous reading, so no debounce needed.
+              if (meter.low_threshold != null && latestValue < Number(meter.low_threshold)) chemLow++;
+            } else {
+              // Switch / counter: trust the persisted, debounced tracked
+              // event rather than the single latest raw reading, so a
+              // momentary blip can't flip the status back to green on its own.
+              if (activeLowMeterIds.has(meterId)) chemLow++;
+            }
+          }
+        });
+
+        const now = new Date().getTime();
+        const lastSeenTime = lastSeen ? new Date(lastSeen).getTime() : 0;
+        const online = now - lastSeenTime < 5 * 60 * 1000;
+
+        return {
+          id: site.id,
+          name: site.name,
+          location: site.location,
+          machine_type: site.machine_type,
+          primary_color: site.primary_color,
+          secondary_color: site.secondary_color,
+          accent_color: site.accent_color,
+          logo_url: site.logo_url,
+          online,
+          wash_today: washToday,
+          wash_total: washTotal,
+          fresh_today: freshToday,
+          fresh_total: freshTotal,
+          chemicals_total: chemTotal,
+          chemicals_low: chemLow,
+          is_new_today: isNewToday,
+          fresh_water_alert:
+            site.fresh_water_daily_threshold_liters != null &&
+            freshToday > Number(site.fresh_water_daily_threshold_liters),
+          avg_water_per_car: washToday > 0 ? avgWaterToday / washToday : null,
+        };
+      });
+
+      const results = await Promise.all(metricsPromises);
+      setSites(results.sort((a, b) => a.name.localeCompare(b.name)));
+    } catch (e) {
+      console.error("Failed to load dashboard:", e);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (authLoading || loading) {
+    return (
+      <div className="max-w-7xl mx-auto px-4 py-8">
+        <div className="h-10 w-48 bg-muted rounded animate-pulse mb-8" />
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          {[...Array(6)].map((_, i) => (
+            <div key={i} className="h-64 bg-muted rounded-lg animate-pulse" />
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="max-w-7xl mx-auto px-4 py-8">
+      {/* Header */}
+      <div className="mb-8 flex items-center justify-between">
+        <div>
+          <h1 className="text-4xl font-bold tracking-tight text-foreground">Operations Dashboard</h1>
+          <p className="text-muted-foreground mt-2">Real-time monitoring of all wash sites</p>
+        </div>
+        <ThemeToggle />
+      </div>
+
+      {/* Sites Grid */}
+      {sites.length === 0 ? (
+        <div className="text-center py-16 bg-card rounded-xl border border-border">
+          <p className="text-muted-foreground text-lg">No sites configured yet</p>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          {sites.map((site) => (
+            <SiteCard key={site.id} site={site} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SiteCard({ site }: { site: SiteMetric }) {
+  const chemicalHealthy = site.chemicals_total === 0 || site.chemicals_low === 0;
+
+  // Per-site theme colors (set in Admin > Site Theme) override the global
+  // --primary/--secondary/--accent CSS variables just within this card's
+  // subtree — every bg-primary/text-primary/border-primary etc. utility
+  // class inside automatically picks up the override, no per-element changes needed.
+  const themeStyle: Record<string, string> = {};
+  if (site.primary_color) themeStyle["--primary"] = site.primary_color;
+  if (site.secondary_color) themeStyle["--secondary"] = site.secondary_color;
+  if (site.accent_color) themeStyle["--accent"] = site.accent_color;
+
+  return (
+    <Link to="/sites/$siteId" params={{ siteId: site.id }}>
+      <div
+        className="group relative bg-card border border-border rounded-xl shadow-sm hover:shadow-md transition-all h-full cursor-pointer overflow-hidden"
+        style={themeStyle}
+      >
+        {/* Top bar with status */}
+        <div className="absolute top-0 left-0 right-0 h-1 bg-muted">
+          <div
+            className={`h-full transition-all ${site.online ? "bg-emerald-500 w-full" : "bg-muted-foreground/40 w-1/4"}`}
+          />
+        </div>
+
+        <div className="p-6 pt-8">
+          {/* Header - No Logo */}
+          <div className="mb-6">
+            <h3 className="font-semibold text-foreground text-lg">{site.name}</h3>
+            {site.location && (
+              <div className="flex items-center gap-1 text-sm text-muted-foreground mt-1">
+                <MapPin className="h-3.5 w-3.5 flex-shrink-0" />
+                <span className="truncate">{site.location}</span>
+              </div>
+            )}
+            {site.machine_type && (
+              <div className="text-xs text-muted-foreground/70 mt-0.5 truncate">
+                {site.machine_type}
+              </div>
+            )}
+          </div>
+
+          {/* Status Badge */}
+          <div className="flex items-center gap-2 mb-6 text-sm">
+            <Radio
+              className={`h-3 w-3 ${
+                site.online ? "text-emerald-500 fill-emerald-500" : "text-muted-foreground fill-slate-500"
+              }`}
+            />
+            <span className={site.online ? "text-emerald-400 font-medium" : "text-muted-foreground"}>
+              {site.online ? "Live" : "Offline"}
+            </span>
+          </div>
+
+          {/* Metrics Grid */}
+          <div className="grid grid-cols-2 gap-3 mb-6">
+            {/* Wash Today */}
+            <div className="bg-muted rounded-lg p-4 border border-border">
+              <div className="flex items-center gap-2 mb-2">
+                <Gauge className="h-4 w-4 text-cyan-400" />
+                <span className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">
+                  {site.is_new_today ? "Since Setup" : "Today"}
+                </span>
+              </div>
+              <div className="text-2xl font-bold text-foreground">{site.wash_today}</div>
+              <div className="text-xs text-muted-foreground mt-1">washes</div>
+            </div>
+
+            {/* Total Wash Counts */}
+            <div className="bg-muted rounded-lg p-4 border border-border">
+              <div className="flex items-center gap-2 mb-2">
+                <TrendingUp className="h-4 w-4 text-cyan-400" />
+                <span className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">Total Wash Counts</span>
+              </div>
+              <div className="text-2xl font-bold text-foreground">{Math.round(site.wash_total)}</div>
+              <div className="text-xs text-muted-foreground mt-1">washes</div>
+            </div>
+
+            {/* Fresh Water */}
+            <div
+              className={`rounded-lg p-4 border ${
+                site.fresh_water_alert
+                  ? "bg-red-950/40 border-red-500/60"
+                  : "bg-muted border-border"
+              }`}
+            >
+              <div className="flex items-center gap-2 mb-2">
+                {site.fresh_water_alert ? (
+                  <AlertTriangle className="h-4 w-4 text-red-400" />
+                ) : (
+                  <Droplets className="h-4 w-4 text-cyan-400" />
+                )}
+                <span
+                  className={`text-[11px] font-semibold uppercase tracking-wide ${
+                    site.fresh_water_alert ? "text-red-300" : "text-muted-foreground"
+                  }`}
+                >
+                  Fresh Water Usage Today{site.fresh_water_alert ? " – High" : ""}
+                </span>
+              </div>
+              <div className={`text-2xl font-bold ${site.fresh_water_alert ? "text-red-300" : "text-foreground"}`}>
+                {Math.round(site.fresh_today)}
+              </div>
+              <div className={`text-xs mt-1 ${site.fresh_water_alert ? "text-red-300/80" : "text-cyan-400"}`}>
+                {site.is_new_today ? "liters since setup" : "liters"}
+              </div>
+            </div>
+
+            {/* Total Fresh Water */}
+            <div className="bg-muted rounded-lg p-4 border border-border">
+              <div className="flex items-center gap-2 mb-2">
+                <Droplets className="h-4 w-4 text-cyan-400" />
+                <span className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">Total Fresh Water</span>
+              </div>
+              <div className="text-2xl font-bold text-foreground">{Math.round(site.fresh_total)}</div>
+              <div className="text-xs text-muted-foreground mt-1">liters</div>
+            </div>
+
+            {/* Chemicals */}
+            <div
+              className={`rounded-lg p-4 border ${
+                chemicalHealthy
+                  ? "bg-muted border-border"
+                  : "bg-amber-900 border-amber-700"
+              }`}
+            >
+              <div className="flex items-center gap-2 mb-2">
+                {chemicalHealthy ? (
+                  <Activity className="h-4 w-4 text-cyan-400" />
+                ) : (
+                  <AlertTriangle className="h-4 w-4 text-amber-400" />
+                )}
+                <span className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">Chem</span>
+              </div>
+              <div className={`text-2xl font-bold ${chemicalHealthy ? "text-foreground" : "text-amber-100"}`}>
+                {site.chemicals_total === 0 ? "—" : chemicalHealthy ? "✓" : site.chemicals_low}
+              </div>
+              <div className={`text-xs mt-1 ${chemicalHealthy ? "text-cyan-400" : "text-amber-400"}`}>
+                {site.chemicals_total === 0
+                  ? "no meters"
+                  : chemicalHealthy
+                  ? "all ok"
+                  : `${site.chemicals_low} low`}
+              </div>
+            </div>
+          </div>
+
+          {/* Avg Water / Car */}
+          <div className="bg-muted rounded-lg p-4 border border-border mb-6">
+            <div className="flex items-center gap-2 mb-2">
+              <Droplets className="h-4 w-4 text-cyan-400" />
+              <span className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">Avg Water / Car</span>
+            </div>
+            <div className="text-2xl font-bold text-foreground">
+              {site.avg_water_per_car !== null ? site.avg_water_per_car.toFixed(1) : "—"}
+            </div>
+            <div className="text-xs text-cyan-400 mt-1">
+              {site.avg_water_per_car !== null ? "L per wash today" : "set meter(s) in Admin"}
+            </div>
+          </div>
+
+          {/* View Details Link */}
+          <div className="flex items-center justify-between text-sm font-medium text-muted-foreground group-hover:text-cyan-400 transition-colors pt-4 border-t border-border">
+            <span className="mt-4">View details</span>
+            <span className="text-lg group-hover:translate-x-1 transition-transform mt-4">→</span>
+          </div>
+        </div>
+      </div>
+    </Link>
+  );
+}
