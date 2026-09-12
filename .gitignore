@@ -31,3 +31,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Lovable.dev platform metadata (this project's original scaffold, not app code)
+.lovable/
