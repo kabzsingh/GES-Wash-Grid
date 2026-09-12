@@ -36,9 +36,9 @@ function LoginPage() {
           }
         });
         nav({ to: "/dashboard" });
-      } catch (err) {
+      } catch (err: any) {
         console.error("Failed to sync session to server:", err);
-        toast.error("Authentication failed. Please try again.");
+        toast.error(`Session sync failed: ${err?.message || String(err)}`);
       }
     }
 
