@@ -348,6 +348,8 @@ scripts/setup-admin.sql`}
 
       <AppThemePanel />
 
+      <SmtpSettingsPanel />
+
       <UsersPanel currentUserId={user?.id ?? ""} />
 
       <section className="space-y-4">
