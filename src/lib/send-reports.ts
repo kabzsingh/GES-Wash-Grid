@@ -47,55 +47,15 @@ async function sendViaSmtp(
   });
 }
 
-async function sendViaSendgrid(
-  to: string[],
-  subject: string,
-  text: string,
-  attachment: { filename: string; mime: string; contentBase64: string },
-  sendgridApiKey: string,
-  fromEmail: string,
-  fromName: string,
-) {
-  const res = await fetch("https://api.sendgrid.com/v3/mail/send", {
-    method: "POST",
-    headers: {
-      "Authorization": `Bearer ${sendgridApiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      from: { email: fromEmail, name: fromName },
-      personalizations: [{ to: to.map((email) => ({ email })) }],
-      subject,
-      content: [{ type: "text/plain", value: text }],
-      attachments: [
-        {
-          filename: attachment.filename,
-          content: attachment.contentBase64,
-          type: attachment.mime,
-        },
-      ],
-    }),
-  });
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`SendGrid error: ${err}`);
-  }
-}
-
-// Sends via the admin-configured SMTP server if one exists (Settings ->
-// System Mail Server), falling back to SendGrid otherwise. SMTP requires a
-// real Node.js runtime with raw socket access — this only became viable
-// after moving off Cloudflare Workers (which doesn't support raw TCP
-// sockets) to Vercel.
+// Sends via the admin-configured SMTP server (Admin -> System Mail Server).
+// SendGrid support has been removed entirely — this requires SMTP to be
+// configured in Admin, and throws a clear error if it isn't.
 async function sendEmail(
   db: Client,
   to: string[],
   subject: string,
   text: string,
   attachment: { filename: string; mime: string; contentBase64: string },
-  sendgridApiKey: string | undefined,
-  fromEmail: string,
-  fromName: string,
 ) {
   const { data: smtp } = await db
     .from("smtp_settings")
@@ -103,15 +63,10 @@ async function sendEmail(
     .eq("id", true)
     .maybeSingle();
 
-  if (smtp) {
-    await sendViaSmtp(smtp as SmtpConfig, to, subject, text, attachment);
-    return;
+  if (!smtp) {
+    throw new Error("No SMTP server configured. Set it up in Admin -> System Mail Server.");
   }
-
-  if (!sendgridApiKey) {
-    throw new Error("No email method configured: set up SMTP in Admin, or set SENDGRID_API_KEY.");
-  }
-  await sendViaSendgrid(to, subject, text, attachment, sendgridApiKey, fromEmail, fromName);
+  await sendViaSmtp(smtp as SmtpConfig, to, subject, text, attachment);
 }
 
 function nowInTz(tz: string, instant = new Date()) {
@@ -293,7 +248,7 @@ async function logReportAttempt(
   });
 }
 
-async function processSite(db: Client, site: any, sendgridApiKey: string | undefined) {
+async function processSite(db: Client, site: any) {
   const tz = site.timezone || "UTC";
   const local = nowInTz(tz);
   // GitHub Actions' scheduled runs are "best effort" and can land anywhere
@@ -309,15 +264,13 @@ async function processSite(db: Client, site: any, sendgridApiKey: string | undef
   const { data: meters, error: mErr } = await db.from("site_meters").select("*").eq("site_id", site.id).order("position");
   if (mErr) throw new Error(mErr.message);
   const results: any[] = [];
-  const fromEmail = "autowashges@gmail.com";
-  const fromName = "Autowash Dashboard Reports";
   if (site.daily_report_enabled) {
     const r = await buildDailyReport(db, site, meters ?? []);
     if (await alreadySent(db, site.id, "daily", r.periodKey)) {
       results.push({ type: "daily", period: r.periodKey, skipped: "already-sent" });
     } else {
       try {
-        await sendEmail(db, recipients, r.subject, r.text, r.attachment, sendgridApiKey, fromEmail, fromName);
+        await sendEmail(db, recipients, r.subject, r.text, r.attachment);
         await logReportAttempt(db, site.id, "daily", r.periodKey, recipients, true);
         results.push({ type: "daily", period: r.periodKey, ok: true });
       } catch (e: any) {
@@ -332,7 +285,7 @@ async function processSite(db: Client, site: any, sendgridApiKey: string | undef
       results.push({ type: "monthly", period: r.periodKey, skipped: "already-sent" });
     } else {
       try {
-        await sendEmail(db, recipients, r.subject, r.text, r.attachment, sendgridApiKey, fromEmail, fromName);
+        await sendEmail(db, recipients, r.subject, r.text, r.attachment);
         await logReportAttempt(db, site.id, "monthly", r.periodKey, recipients, true);
         results.push({ type: "monthly", period: r.periodKey, ok: true });
       } catch (e: any) {
@@ -352,12 +305,6 @@ async function processSite(db: Client, site: any, sendgridApiKey: string | undef
  */
 export async function runSendReports(env: Env, force?: string | null) {
   const db = getSupabaseAdmin(env);
-  // SendGrid is now a fallback — sendEmail() prefers Admin-configured SMTP
-  // (Settings -> System Mail Server) when present. Not requiring
-  // SENDGRID_API_KEY here at all anymore, since SMTP alone is a valid setup;
-  // if neither is configured, sendEmail() throws a clear per-site error
-  // that's caught and logged below rather than failing the whole run.
-  const sendgridApiKey = (env as any).SENDGRID_API_KEY as string | undefined;
   const { data: sites, error } = await db.from("sites").select("*");
   if (error) {
     return { ok: false, error: error.message, processed: [] as any[] };
@@ -369,7 +316,6 @@ export async function runSendReports(env: Env, force?: string | null) {
       const r = await processSite(
         db,
         force ? { ...site, report_hour: nowInTz(site.timezone || "UTC").hour } : site,
-        sendgridApiKey,
       );
       out.push(r);
     } catch (e: any) {
