@@ -11,7 +11,7 @@ jobs:
     steps:
       - name: Call send-reports endpoint
         run: |
-          response=$(curl -s -w "\nHTTP_STATUS:%{http_code}" -X POST \
+          response=$(curl -s -L -w "\nHTTP_STATUS:%{http_code}" -X POST \
             "https://ges-wash-grid.vercel.app/api/public/hooks/send-reports")
           echo "$response"
           status=$(echo "$response" | grep -o 'HTTP_STATUS:[0-9]*' | cut -d: -f2)
