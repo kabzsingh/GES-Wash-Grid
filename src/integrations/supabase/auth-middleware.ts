@@ -9,8 +9,8 @@ import type { Database } from './types'
 // silently overriding these and breaking auth entirely. Since these two
 // values are meant to be public anyway, hardcoding them removes any
 // possibility of that happening again.
-const SUPABASE_URL = "https://ctadjptuulfezdbsklhj.supabase.co";
-const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_okBtsH4wEIqaW8eXEywDcg_A6FGTG98";
+const SUPABASE_URL = "https://sdgkvuasrzdlhblloafp.supabase.co";
+const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_HwkbnBNfmCiiIR8PaVvPiQ_CTVfcBSb";
 
 export const requireSupabaseAuth = createMiddleware({ type: 'function' }).server(
   async ({ next, data }) => {
