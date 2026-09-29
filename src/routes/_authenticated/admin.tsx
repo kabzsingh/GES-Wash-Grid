@@ -1582,7 +1582,19 @@ ${missingComment}
 //     SOCKET_REFRESH_CYCLES polls, since some Delta HMIs silently
 //     let long-held sockets go stale without sending a FIN/RST.
 //  6. Offline queue (SPIFFS) still buffers readings if the network
-//     or API is down, and is capped at MAX_FILE_LINES.
+//     or API is down, and is capped at MAX_FILE_LINES. Queue lines are
+//     removed by how many were actually PROCESSED (sent, skipped-empty,
+//     corrupt, or all-failed), not just how many sent successfully — a
+//     skipped line ahead of a sent one would otherwise cause that sent
+//     line to be left behind and duplicated on the next flush.
+//  7. Remote config check-in (once at boot, hourly after) pulls current
+//     settings like poll interval from the dashboard, so changes made in
+//     Admin apply without a reflash. Falls back to the last-known value
+//     if a check-in fails, rather than blocking normal operation.
+//  8. Free heap is checked every loop; if it drops below
+//     MIN_FREE_HEAP_BYTES the device reboots itself proactively, rather
+//     than risking an eventual out-of-memory crash from fragmentation
+//     during unattended weeks/months of uptime.
 //
 // ============================================================
 // TODO BEFORE FLASHING — fill in the values below from the dashboard:
@@ -1621,6 +1633,7 @@ const int           SOCKET_REFRESH_CYCLES = 40;           // ~10 min at 15s inte
 const unsigned long WDT_TIMEOUT_S      = 30;              // reboot if loop stalls this long
 const unsigned long WIFI_RETRY_BASE_MS = 2000;            // backoff base for WiFi reconnect
 const unsigned long WIFI_RETRY_MAX_MS  = 60000;           // cap backoff at 60s
+const uint32_t      MIN_FREE_HEAP_BYTES = 20000;          // proactively reboot below this, rather than risk an eventual crash from fragmentation over weeks of uptime
 
 WiFiClient modbusSocket;
 uint16_t modbusTransactionId = 0;
@@ -1805,12 +1818,16 @@ void flushQueue() {
   File f = SPIFFS.open(QUEUE_FILE, FILE_READ);
   if (!f || f.size() == 0) { if (f) f.close(); return; }
   int sent = 0;
+  int processed = 0; // every line consumed from the top, whether sent, skipped, or corrupt —
+                      // this (not just the sent count) is what removeFirstLines() must use
+                      // below, or a blank/corrupt/all-failed line ahead of a good one causes
+                      // the good line to be left in the queue and re-sent again next cycle.
   while (f.available()) {
     String line = f.readStringUntil('\\n');
     line.trim();
-    if (line.length() == 0) continue;
+    if (line.length() == 0) { processed++; continue; }
     StaticJsonDocument<512> doc;
-    if (deserializeJson(doc, line)) continue;
+    if (deserializeJson(doc, line)) { processed++; continue; }
 
     String payload = "{\\"readings\\":[";
     bool first = true;
@@ -1830,22 +1847,23 @@ void flushQueue() {
     }
     payload += "]}";
 
-    if (first) continue; // every reading in this queued line failed
+    if (first) { processed++; continue; } // every reading in this queued line failed
 
     if (WiFi.status() != WL_CONNECTED) connectWifi();
-    if (WiFi.status() != WL_CONNECTED) break;
+    if (WiFi.status() != WL_CONNECTED) break; // don't count this line — not yet attempted
 
     if (postPayload(payload)) {
       sent++;
+      processed++;
     } else {
-      break; // stop on first failure, retry whole remaining queue next cycle
+      break; // stop on first failure — don't count this line, retry it next cycle
     }
     esp_task_wdt_reset();
   }
   f.close();
-  if (sent > 0) {
-    Serial.printf("Flushed %d records\\n", sent);
-    removeFirstLines(sent);
+  if (processed > 0) {
+    if (sent > 0) Serial.printf("Flushed %d records\\n", sent);
+    removeFirstLines(processed);
   }
 }
 
@@ -2049,6 +2067,17 @@ void setup() {
 
 void loop() {
   esp_task_wdt_reset();
+
+  // Devices left running unattended for weeks/months can suffer heap
+  // fragmentation from long-running WiFi/TLS/HTTP activity. Rebooting
+  // proactively while still responsive is far safer than waiting for an
+  // eventual out-of-memory crash at some unpredictable, unattended moment.
+  uint32_t freeHeap = ESP.getFreeHeap();
+  if (freeHeap < MIN_FREE_HEAP_BYTES) {
+    Serial.printf("Free heap critically low (%u bytes) — rebooting proactively\\n", freeHeap);
+    delay(100); // let the Serial print actually flush before restart
+    ESP.restart();
+  }
 
   if (WiFi.status() != WL_CONNECTED) connectWifi();
 
