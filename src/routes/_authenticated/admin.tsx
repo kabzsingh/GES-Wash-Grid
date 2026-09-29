@@ -1511,6 +1511,7 @@ function ReportSettings({ site, onSaved }: { site: Site; onSaved: () => void }) 
 
 function buildEsp32Sketch(site: Site, meters: Meter[]) {
   const endpoint = `${typeof window !== "undefined" ? window.location.origin : "https://your-deployment-url.com"}/api/public/ingest`;
+  const configEndpoint = `${typeof window !== "undefined" ? window.location.origin : "https://your-deployment-url.com"}/api/public/config`;
   const pollIntervalSeconds = site.poll_interval_seconds ?? 15;
 
   // Only meters with an HMI Modbus Address configured (in Admin > Meter &
@@ -1601,13 +1602,19 @@ const char* WIFI_SSID    = "";                          // TODO: ${site.name} Wi
 const char* WIFI_PASS    = "";                          // TODO: ${site.name} WiFi password
 const char* SITE_API_KEY = "";                          // TODO: dashboard API key for ${site.name} (generate in Admin > this site > API Keys)
 const char* INGEST_URL   = "${endpoint}";
+const char* CONFIG_URL   = "${configEndpoint}";
 const char* QUEUE_FILE   = "/queue.jsonl";
 
 // HMI acting as Modbus TCP Server
 const char* HMI_IP = "";   // TODO: ${site.name} HMI/PLC IP, e.g. "192.168.8.10"
 const int   MODBUS_PORT = 502;
 
-const unsigned long POLL_INTERVAL_MS   = ${pollIntervalSeconds}UL * 1000UL; // how often to read + send
+// Poll interval starts at this value, but is NOT a hardcoded constant —
+// checkInForConfig() below overwrites it periodically from the dashboard's
+// current setting (Admin -> this site -> ESP32 Poll Interval), so changing
+// it there takes effect on this device's next check-in, no reflash needed.
+unsigned long POLL_INTERVAL_MS   = ${pollIntervalSeconds}UL * 1000UL; // how often to read + send
+const unsigned long CONFIG_CHECK_INTERVAL_MS = 60UL * 60UL * 1000UL; // re-check config hourly
 const int           MAX_FILE_LINES     = 5000;
 const int           MODBUS_MAX_RETRIES = 3;              // per-register retry attempts
 const int           SOCKET_REFRESH_CYCLES = 40;           // ~10 min at 15s interval
@@ -1618,6 +1625,7 @@ const unsigned long WIFI_RETRY_MAX_MS  = 60000;           // cap backoff at 60s
 WiFiClient modbusSocket;
 uint16_t modbusTransactionId = 0;
 unsigned long lastPollMs = 0;
+unsigned long lastConfigCheckMs = 0; // 0 forces a check-in on the very first loop
 int pollsSinceSocketOpen = 0;
 unsigned long wifiRetryDelay = WIFI_RETRY_BASE_MS;
 unsigned long lastWifiAttemptMs = 0;
@@ -1750,6 +1758,46 @@ bool postPayload(const String& payload) {
   if (code == 200) return true;
   Serial.printf("Send failed (HTTP %d)\\n", code);
   return false;
+}
+
+// Checks in with the dashboard for current settings (currently just poll
+// interval; more can be added here later without another reflash). Called
+// once at boot and then every CONFIG_CHECK_INTERVAL_MS — a change made in
+// Admin (Poll Interval panel) takes effect here on the next check-in,
+// no reflash needed. Silently keeps the existing value if this fails
+// (offline, server hiccup, etc.) rather than blocking normal operation.
+void checkInForConfig() {
+  WiFiClientSecure client;
+  client.setInsecure();
+
+  HTTPClient http;
+  if (!http.begin(client, CONFIG_URL)) {
+    Serial.println("Config check-in: http.begin() failed");
+    return;
+  }
+  http.addHeader("x-site-api-key", SITE_API_KEY);
+  http.setTimeout(8000);
+  int code = http.GET();
+
+  if (code == 200) {
+    String body = http.getString();
+    StaticJsonDocument<256> doc;
+    if (!deserializeJson(doc, body)) {
+      long newIntervalSec = doc["poll_interval_seconds"] | 0;
+      if (newIntervalSec >= 5 && newIntervalSec <= 3600) {
+        unsigned long newIntervalMs = (unsigned long)newIntervalSec * 1000UL;
+        if (newIntervalMs != POLL_INTERVAL_MS) {
+          Serial.printf("Config check-in: poll interval updated %lu -> %lu ms\\n", POLL_INTERVAL_MS, newIntervalMs);
+          POLL_INTERVAL_MS = newIntervalMs;
+        }
+      }
+    } else {
+      Serial.println("Config check-in: bad JSON in response");
+    }
+  } else {
+    Serial.printf("Config check-in failed (HTTP %d), keeping current settings\\n", code);
+  }
+  http.end();
 }
 
 void flushQueue() {
@@ -1993,6 +2041,10 @@ void setup() {
   }
 
   connectWifi();
+  if (WiFi.status() == WL_CONNECTED) {
+    checkInForConfig();
+    lastConfigCheckMs = millis();
+  }
 }
 
 void loop() {
@@ -2001,6 +2053,12 @@ void loop() {
   if (WiFi.status() != WL_CONNECTED) connectWifi();
 
   unsigned long now = millis();
+
+  if (WiFi.status() == WL_CONNECTED && now - lastConfigCheckMs >= CONFIG_CHECK_INTERVAL_MS) {
+    lastConfigCheckMs = now;
+    checkInForConfig();
+  }
+
   if (now - lastPollMs >= POLL_INTERVAL_MS) {
     lastPollMs = now;
 

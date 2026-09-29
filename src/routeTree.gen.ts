@@ -16,6 +16,7 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as AuthenticatedDashboardRouteImport } from './routes/_authenticated/dashboard'
 import { Route as AuthenticatedAdminRouteImport } from './routes/_authenticated/admin'
 import { Route as ApiPublicIngestRouteImport } from './routes/api/public/ingest'
+import { Route as ApiPublicConfigRouteImport } from './routes/api/public/config'
 import { Route as AuthenticatedSitesSiteIdRouteImport } from './routes/_authenticated/sites.$siteId'
 import { Route as ApiPublicHooksSendReportsRouteImport } from './routes/api/public/hooks/send-reports'
 import { Route as AuthenticatedSitesSiteIdReportsRouteImport } from './routes/_authenticated/sites.$siteId_.reports'
@@ -54,6 +55,11 @@ const ApiPublicIngestRoute = ApiPublicIngestRouteImport.update({
   path: '/api/public/ingest',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiPublicConfigRoute = ApiPublicConfigRouteImport.update({
+  id: '/api/public/config',
+  path: '/api/public/config',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AuthenticatedSitesSiteIdRoute =
   AuthenticatedSitesSiteIdRouteImport.update({
     id: '/sites/$siteId',
@@ -80,6 +86,7 @@ export interface FileRoutesByFullPath {
   '/admin': typeof AuthenticatedAdminRoute
   '/dashboard': typeof AuthenticatedDashboardRoute
   '/sites/$siteId': typeof AuthenticatedSitesSiteIdRoute
+  '/api/public/config': typeof ApiPublicConfigRoute
   '/api/public/ingest': typeof ApiPublicIngestRoute
   '/sites/$siteId/reports': typeof AuthenticatedSitesSiteIdReportsRoute
   '/api/public/hooks/send-reports': typeof ApiPublicHooksSendReportsRoute
@@ -91,6 +98,7 @@ export interface FileRoutesByTo {
   '/admin': typeof AuthenticatedAdminRoute
   '/dashboard': typeof AuthenticatedDashboardRoute
   '/sites/$siteId': typeof AuthenticatedSitesSiteIdRoute
+  '/api/public/config': typeof ApiPublicConfigRoute
   '/api/public/ingest': typeof ApiPublicIngestRoute
   '/sites/$siteId/reports': typeof AuthenticatedSitesSiteIdReportsRoute
   '/api/public/hooks/send-reports': typeof ApiPublicHooksSendReportsRoute
@@ -104,6 +112,7 @@ export interface FileRoutesById {
   '/_authenticated/admin': typeof AuthenticatedAdminRoute
   '/_authenticated/dashboard': typeof AuthenticatedDashboardRoute
   '/_authenticated/sites/$siteId': typeof AuthenticatedSitesSiteIdRoute
+  '/api/public/config': typeof ApiPublicConfigRoute
   '/api/public/ingest': typeof ApiPublicIngestRoute
   '/_authenticated/sites/$siteId_/reports': typeof AuthenticatedSitesSiteIdReportsRoute
   '/api/public/hooks/send-reports': typeof ApiPublicHooksSendReportsRoute
@@ -117,6 +126,7 @@ export interface FileRouteTypes {
     | '/admin'
     | '/dashboard'
     | '/sites/$siteId'
+    | '/api/public/config'
     | '/api/public/ingest'
     | '/sites/$siteId/reports'
     | '/api/public/hooks/send-reports'
@@ -128,6 +138,7 @@ export interface FileRouteTypes {
     | '/admin'
     | '/dashboard'
     | '/sites/$siteId'
+    | '/api/public/config'
     | '/api/public/ingest'
     | '/sites/$siteId/reports'
     | '/api/public/hooks/send-reports'
@@ -140,6 +151,7 @@ export interface FileRouteTypes {
     | '/_authenticated/admin'
     | '/_authenticated/dashboard'
     | '/_authenticated/sites/$siteId'
+    | '/api/public/config'
     | '/api/public/ingest'
     | '/_authenticated/sites/$siteId_/reports'
     | '/api/public/hooks/send-reports'
@@ -150,6 +162,7 @@ export interface RootRouteChildren {
   AuthenticatedRoute: typeof AuthenticatedRouteWithChildren
   LoginRoute: typeof LoginRoute
   SignupRoute: typeof SignupRoute
+  ApiPublicConfigRoute: typeof ApiPublicConfigRoute
   ApiPublicIngestRoute: typeof ApiPublicIngestRoute
   ApiPublicHooksSendReportsRoute: typeof ApiPublicHooksSendReportsRoute
 }
@@ -205,6 +218,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiPublicIngestRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/public/config': {
+      id: '/api/public/config'
+      path: '/api/public/config'
+      fullPath: '/api/public/config'
+      preLoaderRoute: typeof ApiPublicConfigRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/_authenticated/sites/$siteId': {
       id: '/_authenticated/sites/$siteId'
       path: '/sites/$siteId'
@@ -252,6 +272,7 @@ const rootRouteChildren: RootRouteChildren = {
   AuthenticatedRoute: AuthenticatedRouteWithChildren,
   LoginRoute: LoginRoute,
   SignupRoute: SignupRoute,
+  ApiPublicConfigRoute: ApiPublicConfigRoute,
   ApiPublicIngestRoute: ApiPublicIngestRoute,
   ApiPublicHooksSendReportsRoute: ApiPublicHooksSendReportsRoute,
 }
