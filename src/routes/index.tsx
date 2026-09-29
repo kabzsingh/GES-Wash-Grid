@@ -1,11 +1,58 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useAuth } from "@/lib/auth-context";
 import { Button } from "@/components/ui/button";
-import { Activity, Droplets, FlaskConical, Gauge, Shield } from "lucide-react";
+import { Droplets, FlaskConical, Gauge, Shield } from "lucide-react";
 import logo from "@/assets/logo.jpg";
 
 export const Route = createFileRoute("/")({ component: Landing });
+
+// A small illustrative readout — not live data, just a concrete stand-in
+// for the thing this product actually does, shown as the hero rather than
+// describing it in prose. Ticks gently so it reads as "live" without being
+// a distracting animation.
+function LiveReadoutPanel() {
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setTick((t) => t + 1), 2400);
+    return () => clearInterval(id);
+  }, []);
+
+  const rows = [
+    { site: "Total Centurion Gate", label: "Wash Count", value: 214 + tick, unit: "washes today" },
+    { site: "Sasol La Montagne", label: "Fresh Water", value: 1842 + tick * 3, unit: "L today" },
+    { site: "Europcar Jetpark", label: "Multi Clean", value: null, unit: "OK", ok: true },
+  ];
+
+  return (
+    <div className="rounded-lg border border-border bg-card overflow-hidden">
+      <div className="flex items-center gap-2 px-4 py-2.5 border-b border-border bg-secondary/40">
+        <span className="h-1.5 w-1.5 rounded-full bg-success" />
+        <span className="text-xs font-medium text-muted-foreground">Live — 6 sites reporting</span>
+      </div>
+      <div className="divide-y divide-border">
+        {rows.map((r) => (
+          <div key={r.site} className="flex items-center justify-between px-4 py-3">
+            <div>
+              <div className="text-sm font-medium">{r.label}</div>
+              <div className="text-xs text-muted-foreground">{r.site}</div>
+            </div>
+            <div className="text-right">
+              {r.ok ? (
+                <span className="text-sm font-mono font-medium text-success">{r.unit}</span>
+              ) : (
+                <>
+                  <div className="text-sm font-mono font-semibold tabular-nums">{r.value?.toLocaleString()}</div>
+                  <div className="text-xs text-muted-foreground">{r.unit}</div>
+                </>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 function Landing() {
   const { session, loading } = useAuth();
@@ -30,49 +77,50 @@ function Landing() {
       </header>
 
       <main className="container mx-auto px-6">
-        <section className="py-20 md:py-28 text-center">
-          <div className="inline-flex items-center gap-2 rounded-full border border-border bg-card/60 px-3 py-1 text-xs text-muted-foreground mb-6">
-            <span className="h-1.5 w-1.5 rounded-full bg-success animate-pulse" /> Live telemetry from your ESP32 fleet
+        <section className="py-16 md:py-24 grid md:grid-cols-2 gap-12 items-center">
+          <div>
+            <h1 className="text-3xl md:text-5xl font-semibold tracking-tight max-w-lg">
+              One dashboard for every wash bay you run.
+            </h1>
+            <p className="mt-5 text-base text-muted-foreground max-w-md">
+              Wash counts, fresh water, and chemical levels, streamed straight from your ESP32
+              meters to a single live view. Built for fleets running 20 or more sites.
+            </p>
+            <div className="mt-8 flex flex-wrap gap-3">
+              <Link to="/signup"><Button size="lg">Start free</Button></Link>
+              <Link to="/login"><Button size="lg" variant="outline">I already have an account</Button></Link>
+            </div>
           </div>
-          <h1 className="text-4xl md:text-6xl font-bold tracking-tight max-w-3xl mx-auto">
-            Every wash, every drop, every chemical — <span className="bg-gradient-primary bg-clip-text text-transparent">in real time.</span>
-          </h1>
-          <p className="mt-5 text-base md:text-lg text-muted-foreground max-w-2xl mx-auto">
-            Autowash Dashboard streams wash counts, fresh water, and chemical levels from every site straight to one live dashboard. Built for fleets of 20+ wash sites running ESP32 meters.
-          </p>
-          <div className="mt-8 flex flex-wrap justify-center gap-3">
-            <Link to="/signup"><Button size="lg" className="shadow-glow">Start free</Button></Link>
-            <Link to="/login"><Button size="lg" variant="outline">I already have an account</Button></Link>
-          </div>
+          <LiveReadoutPanel />
         </section>
 
-        <section className="grid grid-cols-1 md:grid-cols-3 gap-4 pb-20">
-          {[
-            { icon: Gauge, title: "Wash counts", text: "Today and lifetime totals from every wash bay." },
-            { icon: Droplets, title: "Fresh water", text: "Track usage per meter, spot leaks fast." },
-            { icon: FlaskConical, title: "Chemical levels", text: "Tank gauges with low-level alerts." },
-          ].map(({ icon: Icon, title, text }) => (
-            <div key={title} className="rounded-xl border border-border bg-card p-6 shadow-card">
-              <div className="h-10 w-10 rounded-lg bg-accent grid place-items-center mb-3">
-                <Icon className="h-5 w-5 text-primary" />
+        <section className="border-t border-border py-14">
+          <div className="grid md:grid-cols-3 gap-x-8 gap-y-8">
+            {[
+              { icon: Gauge, title: "Wash counts", text: "Today and lifetime totals from every wash bay." },
+              { icon: Droplets, title: "Fresh water", text: "Track usage per meter, spot leaks fast." },
+              { icon: FlaskConical, title: "Chemical levels", text: "Tank gauges with low-level alerts." },
+            ].map(({ icon: Icon, title, text }) => (
+              <div key={title} className="flex gap-3">
+                <Icon className="h-5 w-5 text-primary mt-0.5 shrink-0" />
+                <div>
+                  <h3 className="font-medium">{title}</h3>
+                  <p className="text-sm text-muted-foreground mt-1">{text}</p>
+                </div>
               </div>
-              <h3 className="font-semibold">{title}</h3>
-              <p className="text-sm text-muted-foreground mt-1">{text}</p>
-            </div>
-          ))}
+            ))}
+          </div>
         </section>
 
-        <section className="rounded-2xl border border-border bg-gradient-surface p-8 md:p-12 mb-20 shadow-card">
+        <section className="border-t border-border py-14 mb-6">
           <div className="flex items-start gap-4">
-            <div className="h-10 w-10 rounded-lg bg-accent grid place-items-center shrink-0">
-              <Shield className="h-5 w-5 text-primary" />
-            </div>
-            <div>
-              <h2 className="text-xl font-semibold">Secure ingest for your ESP32s</h2>
+            <Shield className="h-5 w-5 text-primary mt-0.5 shrink-0" />
+            <div className="w-full">
+              <h2 className="text-lg font-medium">Secure ingest for your ESP32s</h2>
               <p className="text-sm text-muted-foreground mt-1 max-w-2xl">
                 Each site gets its own API key. Your ESP32 posts JSON readings to a single endpoint — we handle storage, time series, and access control automatically.
               </p>
-              <pre className="mt-4 text-xs bg-background/60 rounded-lg p-4 overflow-x-auto border border-border">
+              <pre className="mt-4 text-xs font-mono bg-card rounded-lg p-4 overflow-x-auto border border-border">
 {`POST /api/public/ingest
 x-site-api-key: ws_live_********
 {
