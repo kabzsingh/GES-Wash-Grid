@@ -19,6 +19,7 @@ import { Route as ApiPublicIngestRouteImport } from './routes/api/public/ingest'
 import { Route as ApiPublicConfigRouteImport } from './routes/api/public/config'
 import { Route as AuthenticatedSitesSiteIdRouteImport } from './routes/_authenticated/sites.$siteId'
 import { Route as ApiPublicHooksSendReportsRouteImport } from './routes/api/public/hooks/send-reports'
+import { Route as ApiPublicHooksCleanupReportsRouteImport } from './routes/api/public/hooks/cleanup-reports'
 import { Route as AuthenticatedSitesSiteIdReportsRouteImport } from './routes/_authenticated/sites.$siteId_.reports'
 
 const SignupRoute = SignupRouteImport.update({
@@ -72,6 +73,12 @@ const ApiPublicHooksSendReportsRoute =
     path: '/api/public/hooks/send-reports',
     getParentRoute: () => rootRouteImport,
   } as any)
+const ApiPublicHooksCleanupReportsRoute =
+  ApiPublicHooksCleanupReportsRouteImport.update({
+    id: '/api/public/hooks/cleanup-reports',
+    path: '/api/public/hooks/cleanup-reports',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const AuthenticatedSitesSiteIdReportsRoute =
   AuthenticatedSitesSiteIdReportsRouteImport.update({
     id: '/sites/$siteId_/reports',
@@ -89,6 +96,7 @@ export interface FileRoutesByFullPath {
   '/api/public/config': typeof ApiPublicConfigRoute
   '/api/public/ingest': typeof ApiPublicIngestRoute
   '/sites/$siteId/reports': typeof AuthenticatedSitesSiteIdReportsRoute
+  '/api/public/hooks/cleanup-reports': typeof ApiPublicHooksCleanupReportsRoute
   '/api/public/hooks/send-reports': typeof ApiPublicHooksSendReportsRoute
 }
 export interface FileRoutesByTo {
@@ -101,6 +109,7 @@ export interface FileRoutesByTo {
   '/api/public/config': typeof ApiPublicConfigRoute
   '/api/public/ingest': typeof ApiPublicIngestRoute
   '/sites/$siteId/reports': typeof AuthenticatedSitesSiteIdReportsRoute
+  '/api/public/hooks/cleanup-reports': typeof ApiPublicHooksCleanupReportsRoute
   '/api/public/hooks/send-reports': typeof ApiPublicHooksSendReportsRoute
 }
 export interface FileRoutesById {
@@ -115,6 +124,7 @@ export interface FileRoutesById {
   '/api/public/config': typeof ApiPublicConfigRoute
   '/api/public/ingest': typeof ApiPublicIngestRoute
   '/_authenticated/sites/$siteId_/reports': typeof AuthenticatedSitesSiteIdReportsRoute
+  '/api/public/hooks/cleanup-reports': typeof ApiPublicHooksCleanupReportsRoute
   '/api/public/hooks/send-reports': typeof ApiPublicHooksSendReportsRoute
 }
 export interface FileRouteTypes {
@@ -129,6 +139,7 @@ export interface FileRouteTypes {
     | '/api/public/config'
     | '/api/public/ingest'
     | '/sites/$siteId/reports'
+    | '/api/public/hooks/cleanup-reports'
     | '/api/public/hooks/send-reports'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -141,6 +152,7 @@ export interface FileRouteTypes {
     | '/api/public/config'
     | '/api/public/ingest'
     | '/sites/$siteId/reports'
+    | '/api/public/hooks/cleanup-reports'
     | '/api/public/hooks/send-reports'
   id:
     | '__root__'
@@ -154,6 +166,7 @@ export interface FileRouteTypes {
     | '/api/public/config'
     | '/api/public/ingest'
     | '/_authenticated/sites/$siteId_/reports'
+    | '/api/public/hooks/cleanup-reports'
     | '/api/public/hooks/send-reports'
   fileRoutesById: FileRoutesById
 }
@@ -164,6 +177,7 @@ export interface RootRouteChildren {
   SignupRoute: typeof SignupRoute
   ApiPublicConfigRoute: typeof ApiPublicConfigRoute
   ApiPublicIngestRoute: typeof ApiPublicIngestRoute
+  ApiPublicHooksCleanupReportsRoute: typeof ApiPublicHooksCleanupReportsRoute
   ApiPublicHooksSendReportsRoute: typeof ApiPublicHooksSendReportsRoute
 }
 
@@ -239,6 +253,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiPublicHooksSendReportsRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/public/hooks/cleanup-reports': {
+      id: '/api/public/hooks/cleanup-reports'
+      path: '/api/public/hooks/cleanup-reports'
+      fullPath: '/api/public/hooks/cleanup-reports'
+      preLoaderRoute: typeof ApiPublicHooksCleanupReportsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/_authenticated/sites/$siteId_/reports': {
       id: '/_authenticated/sites/$siteId_/reports'
       path: '/sites/$siteId/reports'
@@ -274,6 +295,7 @@ const rootRouteChildren: RootRouteChildren = {
   SignupRoute: SignupRoute,
   ApiPublicConfigRoute: ApiPublicConfigRoute,
   ApiPublicIngestRoute: ApiPublicIngestRoute,
+  ApiPublicHooksCleanupReportsRoute: ApiPublicHooksCleanupReportsRoute,
   ApiPublicHooksSendReportsRoute: ApiPublicHooksSendReportsRoute,
 }
 export const routeTree = rootRouteImport

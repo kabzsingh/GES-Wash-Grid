@@ -19,3 +19,19 @@ jobs:
             echo "::error::send-reports returned HTTP $status"
             exit 1
           fi
+
+      - name: Call cleanup-reports endpoint (once daily, at 04:00 UTC)
+        run: |
+          hour=$(date -u +%H)
+          if [ "$hour" != "04" ]; then
+            echo "Not the scheduled hour (04:00 UTC), skipping cleanup this run."
+            exit 0
+          fi
+          response=$(curl -s -L -w "\nHTTP_STATUS:%{http_code}" -X POST \
+            "https://ges-wash-grid.vercel.app/api/public/hooks/cleanup-reports")
+          echo "$response"
+          status=$(echo "$response" | grep -o 'HTTP_STATUS:[0-9]*' | cut -d: -f2)
+          if [ "$status" -ge 400 ]; then
+            echo "::error::cleanup-reports returned HTTP $status"
+            exit 1
+          fi

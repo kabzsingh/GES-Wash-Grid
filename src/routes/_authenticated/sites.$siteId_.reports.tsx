@@ -401,7 +401,83 @@ function SiteReportsPage() {
             loading={loading}
           />
         </div>
+
+        <ArchivedReportsSection siteId={siteId} />
       </div>
+    </div>
+  );
+}
+
+function ArchivedReportsSection({ siteId }: { siteId: string }) {
+  const [files, setFiles] = useState<{ name: string; created_at: string }[]>([]);
+  const [loadingList, setLoadingList] = useState(true);
+  const [downloadingName, setDownloadingName] = useState<string | null>(null);
+
+  useEffect(() => {
+    loadArchive();
+  }, [siteId]);
+
+  const loadArchive = async () => {
+    setLoadingList(true);
+    const { data, error } = await supabase.storage
+      .from("reports")
+      .list(siteId, { sortBy: { column: "created_at", order: "desc" } });
+    if (!error && data) {
+      setFiles(data.map((f) => ({ name: f.name, created_at: (f as any).created_at })));
+    }
+    setLoadingList(false);
+  };
+
+  const downloadArchived = async (filename: string) => {
+    setDownloadingName(filename);
+    try {
+      const { data, error } = await supabase.storage.from("reports").download(`${siteId}/${filename}`);
+      if (error || !data) {
+        toast.error("Failed to download report");
+        return;
+      }
+      const url = URL.createObjectURL(data);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(url);
+    } finally {
+      setDownloadingName(null);
+    }
+  };
+
+  return (
+    <div className="mt-8">
+      <h2 className="text-lg font-semibold mb-3">Archived Reports</h2>
+      <p className="text-sm text-muted-foreground mb-4">
+        Every automated daily/monthly report is saved here automatically, kept for 90 days —
+        useful if an email didn't arrive or you just need a past report again.
+      </p>
+      <Card className="p-4">
+        {loadingList ? (
+          <p className="text-sm text-muted-foreground">Loading...</p>
+        ) : files.length === 0 ? (
+          <p className="text-sm text-muted-foreground">No archived reports yet.</p>
+        ) : (
+          <div className="space-y-2">
+            {files.map((f) => (
+              <div key={f.name} className="flex items-center justify-between py-2 border-b border-border/50 last:border-0">
+                <span className="text-sm font-mono">{f.name}</span>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => downloadArchived(f.name)}
+                  disabled={downloadingName === f.name}
+                >
+                  <Download className="h-3.5 w-3.5 mr-1.5" />
+                  {downloadingName === f.name ? "..." : "Download"}
+                </Button>
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
     </div>
   );
 }

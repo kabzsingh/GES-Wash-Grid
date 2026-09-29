@@ -248,6 +248,24 @@ async function logReportAttempt(
   });
 }
 
+async function uploadReportToStorage(
+  db: Client,
+  siteId: string,
+  reportType: "daily" | "monthly",
+  periodKey: string,
+  attachment: { filename: string; mime: string; contentBase64: string },
+) {
+  const path = `${siteId}/${reportType}-${periodKey}.xlsx`;
+  const bytes = Buffer.from(attachment.contentBase64, "base64");
+  const { error } = await db.storage.from("reports").upload(path, bytes, {
+    contentType: attachment.mime,
+    upsert: true,
+  });
+  if (error) {
+    console.error(`Failed to archive report to storage (${path}):`, error.message);
+  }
+}
+
 async function processSite(db: Client, site: any) {
   const tz = site.timezone || "UTC";
   const local = nowInTz(tz);
@@ -269,6 +287,7 @@ async function processSite(db: Client, site: any) {
     if (await alreadySent(db, site.id, "daily", r.periodKey)) {
       results.push({ type: "daily", period: r.periodKey, skipped: "already-sent" });
     } else {
+      await uploadReportToStorage(db, site.id, "daily", r.periodKey, r.attachment);
       try {
         await sendEmail(db, recipients, r.subject, r.text, r.attachment);
         await logReportAttempt(db, site.id, "daily", r.periodKey, recipients, true);
@@ -284,6 +303,7 @@ async function processSite(db: Client, site: any) {
     if (await alreadySent(db, site.id, "monthly", r.periodKey)) {
       results.push({ type: "monthly", period: r.periodKey, skipped: "already-sent" });
     } else {
+      await uploadReportToStorage(db, site.id, "monthly", r.periodKey, r.attachment);
       try {
         await sendEmail(db, recipients, r.subject, r.text, r.attachment);
         await logReportAttempt(db, site.id, "monthly", r.periodKey, recipients, true);
