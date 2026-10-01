@@ -1991,7 +1991,16 @@ bool ensureModbusConnected(bool forceReconnect = false) {
   if (modbusSocket.connected()) return true;
 
   Serial.print("Connecting to HMI Modbus TCP...");
-  if (!modbusSocket.connect(HMI_IP, MODBUS_PORT)) {
+  esp_task_wdt_reset();
+  // Explicit timeout (ms) passed directly to connect() — same lesson as
+  // postPayload()/checkInForConfig(): a generic setTimeout() call doesn't
+  // reliably bound the connection attempt itself on every ESP32 core
+  // version. If the HMI's network ever silently drops packets rather than
+  // actively refusing the connection (a dead HMI, a flaky switch/cable),
+  // this could otherwise hang well past the watchdog's budget.
+  bool connected = modbusSocket.connect(HMI_IP, MODBUS_PORT, 3000);
+  esp_task_wdt_reset();
+  if (!connected) {
     Serial.println(" FAILED");
     return false;
   }
@@ -2008,9 +2017,13 @@ bool modbusReadHoldingRegistersOnce(uint16_t startAddr, uint16_t numRegs, uint16
   if (!ensureModbusConnected()) return false;
 
   // Flush any stale/leftover bytes sitting in the socket buffer from a
-  // previous slow response before sending a new request.
-  while (modbusSocket.available()) {
+  // previous slow response before sending a new request. Bounded and
+  // watchdog-safe even in the unlikely case data keeps arriving continuously.
+  int flushGuard = 0;
+  while (modbusSocket.available() && flushGuard < 10000) {
     modbusSocket.read();
+    flushGuard++;
+    if (flushGuard % 1000 == 0) esp_task_wdt_reset();
   }
 
   modbusTransactionId++;
