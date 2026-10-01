@@ -1860,6 +1860,14 @@ void connectWifi() {
 bool postPayload(const String& payload) {
   WiFiClientSecure client;
   client.setInsecure(); // no cert pinning needed for this endpoint/use case
+  // Set directly on the underlying client, not just via HTTPClient::setTimeout()
+  // below — on some ESP32 core versions, HTTPClient's own timeout only bounds
+  // reading the response, not the initial TCP connect + TLS handshake, which
+  // can otherwise hang well past this value and trip the 30s watchdog even
+  // though a "timeout" was set. This is a likely real cause of the
+  // watchdog resets/reboots seen on-site, separate from the server-side
+  // Pulse-forwarding fix.
+  client.setTimeout(8000);
 
   HTTPClient http;
   if (!http.begin(client, INGEST_URL)) {
@@ -1869,7 +1877,9 @@ bool postPayload(const String& payload) {
   http.addHeader("Content-Type", "application/json");
   http.addHeader("x-site-api-key", SITE_API_KEY);
   http.setTimeout(8000);
+  esp_task_wdt_reset(); // reset right before the blocking call, maximizing budget
   int code = http.POST(payload);
+  esp_task_wdt_reset(); // and immediately after, in case it took a while
   http.end();
 
   if (code == 200) return true;
@@ -1886,6 +1896,7 @@ bool postPayload(const String& payload) {
 void checkInForConfig() {
   WiFiClientSecure client;
   client.setInsecure();
+  client.setTimeout(8000); // see postPayload() above for why this is set directly on the client too
 
   HTTPClient http;
   if (!http.begin(client, CONFIG_URL)) {
@@ -1894,7 +1905,9 @@ void checkInForConfig() {
   }
   http.addHeader("x-site-api-key", SITE_API_KEY);
   http.setTimeout(8000);
+  esp_task_wdt_reset();
   int code = http.GET();
+  esp_task_wdt_reset();
 
   if (code == 200) {
     String body = http.getString();
