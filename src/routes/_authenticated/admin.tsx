@@ -1152,6 +1152,22 @@ function SiteAdminCard({
 function PulseForwardingSettings({ site }: { site: Site }) {
   const [url, setUrl] = useState(site.pulse_forward_url || "");
   const [saving, setSaving] = useState(false);
+  const [log, setLog] = useState<{ id: number; success: boolean; status_code: number | null; error: string | null; attempted_at: string }[]>([]);
+  const [loadingLog, setLoadingLog] = useState(true);
+
+  const loadLog = async () => {
+    setLoadingLog(true);
+    const { data } = await supabase
+      .from("pulse_forward_log")
+      .select("id, success, status_code, error, attempted_at")
+      .eq("site_id", site.id)
+      .order("attempted_at", { ascending: false })
+      .limit(5);
+    setLog(data ?? []);
+    setLoadingLog(false);
+  };
+
+  useEffect(() => { loadLog(); }, [site.id]);
 
   const save = async () => {
     setSaving(true);
@@ -1192,6 +1208,38 @@ function PulseForwardingSettings({ site }: { site: Site }) {
           {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Save"}
         </Button>
       </div>
+
+      {site.pulse_forward_url && (
+        <div className="mt-4 max-w-xl">
+          <div className="flex items-center justify-between mb-1.5">
+            <Label className="text-[10px] text-muted-foreground">Recent forward attempts</Label>
+            <button onClick={loadLog} className="text-[10px] text-primary hover:underline">Refresh</button>
+          </div>
+          {loadingLog ? (
+            <p className="text-xs text-muted-foreground">Loading...</p>
+          ) : log.length === 0 ? (
+            <p className="text-xs text-muted-foreground italic">No attempts yet — nothing sent since this link was saved.</p>
+          ) : (
+            <div className="rounded-lg border border-border/60 divide-y divide-border/60 overflow-hidden">
+              {log.map((l) => (
+                <div key={l.id} className="flex items-center justify-between px-3 py-2 text-xs">
+                  <span className={l.success ? "text-success" : "text-destructive"}>
+                    {l.success ? "OK" : `Failed${l.status_code ? ` (HTTP ${l.status_code})` : ""}`}
+                  </span>
+                  <span className="text-muted-foreground font-mono text-[10px]">
+                    {new Date(l.attempted_at).toLocaleString()}
+                  </span>
+                </div>
+              ))}
+              {log.some((l) => !l.success && l.error) && (
+                <div className="px-3 py-2 text-[10px] text-destructive bg-destructive/5 font-mono break-all">
+                  {log.find((l) => !l.success && l.error)?.error}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

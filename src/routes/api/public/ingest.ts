@@ -202,20 +202,41 @@ export const Route = createFileRoute("/api/public/ingest")({
         // Optional server-to-server forward to a third-party system (Pulse),
         // configured per-site via sites.pulse_forward_url. The device itself
         // never knows about this — it only ever talks to this one endpoint,
-        // exactly as before. This relays the exact same payload the device
-        // sent us, matching what Pulse's own side expects. Deliberately
-        // fire-and-forget: a slow or failing third party must never delay
-        // or fail the response back to the ESP32, which only cares about
-        // its own ingest succeeding.
+        // exactly as before; this relays the exact same payload it sent us.
+        // Deliberately AWAITED (not fire-and-forget) despite adding a little
+        // latency to the device's response: an un-awaited background task
+        // risks being frozen mid-flight the instant Vercel sends our
+        // response (a known gotcha on this platform), which would make the
+        // forward silently never complete. Every attempt — success,
+        // network failure, or a non-2xx response from Pulse itself — is
+        // logged to pulse_forward_log either way, so this is diagnosable.
         const pulseUrl = (keyRow as any).sites?.pulse_forward_url as string | null | undefined;
         if (pulseUrl) {
-          fetch(pulseUrl, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(body),
-          }).catch((e) => {
-            console.error(`Pulse forward failed for site ${keyRow.site_id}:`, e.message);
-          });
+          try {
+            const res = await fetch(pulseUrl, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(body),
+            });
+            const ok = res.status >= 200 && res.status < 300;
+            let errText: string | null = null;
+            if (!ok) {
+              try { errText = (await res.text()).slice(0, 500); } catch { /* ignore */ }
+            }
+            await db.from("pulse_forward_log").insert({
+              site_id: keyRow.site_id,
+              success: ok,
+              status_code: res.status,
+              error: errText,
+            });
+          } catch (e: any) {
+            await db.from("pulse_forward_log").insert({
+              site_id: keyRow.site_id,
+              success: false,
+              status_code: null,
+              error: e?.message?.slice(0, 500) || String(e),
+            });
+          }
         }
 
         return json({ 
