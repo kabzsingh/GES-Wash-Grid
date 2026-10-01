@@ -210,7 +210,12 @@ export const Route = createFileRoute("/api/public/ingest")({
         // forward silently never complete. Every attempt — success,
         // network failure, or a non-2xx response from Pulse itself — is
         // logged to pulse_forward_log either way, so this is diagnosable.
-        const pulseUrl = (keyRow as any).sites?.pulse_forward_url as string | null | undefined;
+        // keyRow.sites comes back as an array, not a single object — the
+        // relationship is marked isOneToOne: false in the generated types,
+        // so PostgREST returns it array-shaped even though in practice
+        // each api key belongs to exactly one site.
+        const siteRow = Array.isArray((keyRow as any).sites) ? (keyRow as any).sites[0] : (keyRow as any).sites;
+        const pulseUrl = siteRow?.pulse_forward_url as string | null | undefined;
         if (pulseUrl) {
           try {
             const res = await fetch(pulseUrl, {

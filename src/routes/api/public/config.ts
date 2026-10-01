@@ -64,7 +64,11 @@ export const Route = createFileRoute("/api/public/config")({
 
         if (keyRow.revoked) return json({ error: "Key revoked" }, 401);
 
-        const site = (keyRow as any).sites;
+        // keyRow.sites comes back as an array, not a single object (same
+        // isOneToOne: false quirk as in ingest.ts) — without this fix,
+        // site.poll_interval_seconds was always undefined, meaning this
+        // whole remote config check-in silently never worked at all.
+        const site = Array.isArray((keyRow as any).sites) ? (keyRow as any).sites[0] : (keyRow as any).sites;
         if (!site) return json({ error: "Site not found" }, 404);
 
         return json({
