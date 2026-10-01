@@ -1857,17 +1857,38 @@ void connectWifi() {
 }
 
 // ===== HTTPS send (fixed: explicit WiFiClientSecure so https:// actually connects) =====
+// Extracts just the hostname from a "https://host/path" URL string, for
+// use with WiFiClientSecure::connect(host, port, timeout) below.
+String extractHost(const char* url) {
+  String s(url);
+  s.replace("https://", "");
+  s.replace("http://", "");
+  int slash = s.indexOf('/');
+  if (slash >= 0) s = s.substring(0, slash);
+  return s;
+}
+
 bool postPayload(const String& payload) {
   WiFiClientSecure client;
   client.setInsecure(); // no cert pinning needed for this endpoint/use case
-  // Set directly on the underlying client, not just via HTTPClient::setTimeout()
-  // below — on some ESP32 core versions, HTTPClient's own timeout only bounds
-  // reading the response, not the initial TCP connect + TLS handshake, which
-  // can otherwise hang well past this value and trip the 30s watchdog even
-  // though a "timeout" was set. This is a likely real cause of the
-  // watchdog resets/reboots seen on-site, separate from the server-side
-  // Pulse-forwarding fix.
-  client.setTimeout(8000);
+
+  // Connect explicitly with a timeout BEFORE handing the client to
+  // HTTPClient — this is the proven-correct pattern (same as the Modbus
+  // fix). HTTPClient::begin()/POST() otherwise establishes the connection
+  // itself internally when the request is actually sent, which does NOT
+  // reliably respect a timeout set via client.setTimeout() beforehand on
+  // every ESP32 core version — confirmed by the exact same freeze-after-
+  // WiFi-connects symptom recurring on a brand new board even after that
+  // fix. Connecting first ourselves, with an explicit timeout, means
+  // HTTPClient detects the already-open connection and skips its own
+  // internal (unbounded) connect attempt entirely.
+  esp_task_wdt_reset();
+  bool connected = client.connect(extractHost(INGEST_URL).c_str(), 443, 8000);
+  esp_task_wdt_reset();
+  if (!connected) {
+    Serial.println("postPayload: connect failed/timed out");
+    return false;
+  }
 
   HTTPClient http;
   if (!http.begin(client, INGEST_URL)) {
@@ -1877,9 +1898,9 @@ bool postPayload(const String& payload) {
   http.addHeader("Content-Type", "application/json");
   http.addHeader("x-site-api-key", SITE_API_KEY);
   http.setTimeout(8000);
-  esp_task_wdt_reset(); // reset right before the blocking call, maximizing budget
+  esp_task_wdt_reset();
   int code = http.POST(payload);
-  esp_task_wdt_reset(); // and immediately after, in case it took a while
+  esp_task_wdt_reset();
   http.end();
 
   if (code == 200) return true;
@@ -1896,7 +1917,16 @@ bool postPayload(const String& payload) {
 void checkInForConfig() {
   WiFiClientSecure client;
   client.setInsecure();
-  client.setTimeout(8000); // see postPayload() above for why this is set directly on the client too
+
+  // See postPayload() above for why this explicit pre-connect (not just
+  // setTimeout()) is what actually bounds the connection/TLS handshake.
+  esp_task_wdt_reset();
+  bool connected = client.connect(extractHost(CONFIG_URL).c_str(), 443, 8000);
+  esp_task_wdt_reset();
+  if (!connected) {
+    Serial.println("Config check-in: connect failed/timed out, keeping current settings");
+    return;
+  }
 
   HTTPClient http;
   if (!http.begin(client, CONFIG_URL)) {
