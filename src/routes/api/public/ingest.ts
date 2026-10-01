@@ -199,6 +199,25 @@ export const Route = createFileRoute("/api/public/ingest")({
           .update({ last_used_at: new Date().toISOString() })
           .eq("key_hash", hash);
 
+        // Optional server-to-server forward to a third-party system (Pulse),
+        // configured per-site via sites.pulse_forward_url. The device itself
+        // never knows about this — it only ever talks to this one endpoint,
+        // exactly as before. This relays the exact same payload the device
+        // sent us, matching what Pulse's own side expects. Deliberately
+        // fire-and-forget: a slow or failing third party must never delay
+        // or fail the response back to the ESP32, which only cares about
+        // its own ingest succeeding.
+        const pulseUrl = (keyRow as any).sites?.pulse_forward_url as string | null | undefined;
+        if (pulseUrl) {
+          fetch(pulseUrl, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+          }).catch((e) => {
+            console.error(`Pulse forward failed for site ${keyRow.site_id}:`, e.message);
+          });
+        }
+
         return json({ 
           ok: true, 
           accepted: readings.length, 

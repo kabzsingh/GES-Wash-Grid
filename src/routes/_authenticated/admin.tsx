@@ -13,7 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { toast } from "sonner";
 import { createSiteApiKey, grantAdminBootstrap, getSmtpSettings, updateSmtpSettings, listAllUsers, setUserRole, deleteUser } from "@/lib/admin.functions";
-import { Copy, Plus, Trash2, KeyRound, Cpu, Mail, Send, Server, ShieldCheck, Loader2, AlertTriangle, Users, UserCheck, UserX, Building2, Save, Pencil, Palette } from "lucide-react";
+import { Copy, Plus, Trash2, KeyRound, Cpu, Mail, Send, Server, ShieldCheck, Loader2, AlertTriangle, Users, UserCheck, UserX, Building2, Save, Pencil, Palette, Share2 } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 
 import { Textarea } from "@/components/ui/textarea";
@@ -35,6 +35,7 @@ interface Site {
   fresh_water_daily_threshold_liters?: number | null;
   machine_type?: string | null;
   poll_interval_seconds?: number;
+  pulse_forward_url?: string | null;
 }
 interface Meter { id: string; site_id: string; meter_type: "wash"|"fresh_water"|"chemical"|"chemical_flow"; name: string; unit: string; capacity: number | null; low_threshold: number | null; device_key: string; position: number; chemical_group: string | null; modbus_address: number | null; sensor_type: "switch" | "probe" | "counter"; count_for_avg_water: boolean }
 interface ApiKeyRow { id: string; site_id: string; key_prefix: string; label: string | null; revoked: boolean; last_used_at: string | null; created_at: string }
@@ -1129,6 +1130,10 @@ function SiteAdminCard({
         </div>
 
         <div className="pt-4 border-t border-border/60">
+          <PulseForwardingSettings site={site} />
+        </div>
+
+        <div className="pt-4 border-t border-border/60">
           <WaterAlertSettings site={site} onSaved={() => { /* parent will refetch on next mount */ }} />
         </div>
 
@@ -1139,6 +1144,53 @@ function SiteAdminCard({
         <div className="pt-4 border-t border-border/60">
           <ReportSettings site={site} onSaved={() => { /* parent will refetch on next mount */ }} />
         </div>
+      </div>
+    </div>
+  );
+}
+
+function PulseForwardingSettings({ site }: { site: Site }) {
+  const [url, setUrl] = useState(site.pulse_forward_url || "");
+  const [saving, setSaving] = useState(false);
+
+  const save = async () => {
+    setSaving(true);
+    const { error } = await supabase
+      .from("sites")
+      .update({ pulse_forward_url: url.trim() || null })
+      .eq("id", site.id);
+    setSaving(false);
+    if (error) {
+      toast.error(error.message || "Failed to save Pulse forwarding link");
+    } else {
+      toast.success(url.trim() ? "Pulse forwarding enabled for this site" : "Pulse forwarding disabled for this site");
+    }
+  };
+
+  return (
+    <div>
+      <div className="flex items-center gap-3 mb-3">
+        <div className="h-8 w-8 rounded bg-muted flex items-center justify-center">
+          <Share2 className="h-4 w-4 text-muted-foreground" />
+        </div>
+        <div>
+          <h4 className="text-sm font-bold uppercase tracking-widest text-muted-foreground">Pulse Forwarding</h4>
+          <p className="text-[10px] text-muted-foreground mt-0.5">
+            Optional — paste the per-site link Werner gives you from Pulse. Every reading this site sends
+            will also be relayed there automatically. Leave blank to disable.
+          </p>
+        </div>
+      </div>
+      <div className="flex gap-2 max-w-xl">
+        <Input
+          value={url}
+          onChange={(e) => setUrl(e.target.value)}
+          placeholder="https://www.gespulse.com/api/public/telemetry/wash-ingest/..."
+          className="h-9 text-xs font-mono"
+        />
+        <Button size="sm" onClick={save} disabled={saving} className="h-9 text-xs font-bold shrink-0">
+          {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Save"}
+        </Button>
       </div>
     </div>
   );
