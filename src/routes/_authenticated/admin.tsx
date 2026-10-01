@@ -1152,16 +1152,16 @@ function SiteAdminCard({
 function PulseForwardingSettings({ site }: { site: Site }) {
   const [url, setUrl] = useState(site.pulse_forward_url || "");
   const [saving, setSaving] = useState(false);
-  const [log, setLog] = useState<{ id: number; success: boolean; status_code: number | null; error: string | null; attempted_at: string }[]>([]);
+  const [log, setLog] = useState<{ id: number; status: string; attempts: number; last_error: string | null; created_at: string; sent_at: string | null }[]>([]);
   const [loadingLog, setLoadingLog] = useState(true);
 
   const loadLog = async () => {
     setLoadingLog(true);
     const { data } = await supabase
-      .from("pulse_forward_log")
-      .select("id, success, status_code, error, attempted_at")
+      .from("pulse_forward_queue")
+      .select("id, status, attempts, last_error, created_at, sent_at")
       .eq("site_id", site.id)
-      .order("attempted_at", { ascending: false })
+      .order("created_at", { ascending: false })
       .limit(5);
     setLog(data ?? []);
     setLoadingLog(false);
@@ -1212,28 +1212,32 @@ function PulseForwardingSettings({ site }: { site: Site }) {
       {site.pulse_forward_url && (
         <div className="mt-4 max-w-xl">
           <div className="flex items-center justify-between mb-1.5">
-            <Label className="text-[10px] text-muted-foreground">Recent forward attempts</Label>
+            <Label className="text-[10px] text-muted-foreground">Recent queue status</Label>
             <button onClick={loadLog} className="text-[10px] text-primary hover:underline">Refresh</button>
           </div>
+          <p className="text-[10px] text-muted-foreground mb-2">
+            Readings are queued instantly, then delivered to Pulse on a separate hourly check — never on the
+            ESP32's own request, so a slow or down Pulse endpoint can't affect your equipment data pipeline.
+          </p>
           {loadingLog ? (
             <p className="text-xs text-muted-foreground">Loading...</p>
           ) : log.length === 0 ? (
-            <p className="text-xs text-muted-foreground italic">No attempts yet — nothing sent since this link was saved.</p>
+            <p className="text-xs text-muted-foreground italic">Nothing queued yet since this link was saved.</p>
           ) : (
             <div className="rounded-lg border border-border/60 divide-y divide-border/60 overflow-hidden">
               {log.map((l) => (
                 <div key={l.id} className="flex items-center justify-between px-3 py-2 text-xs">
-                  <span className={l.success ? "text-success" : "text-destructive"}>
-                    {l.success ? "OK" : `Failed${l.status_code ? ` (HTTP ${l.status_code})` : ""}`}
+                  <span className={l.status === "sent" ? "text-success" : l.status === "failed" ? "text-destructive" : "text-muted-foreground"}>
+                    {l.status === "sent" ? "Sent" : l.status === "failed" ? `Failed (${l.attempts} attempts)` : "Pending"}
                   </span>
                   <span className="text-muted-foreground font-mono text-[10px]">
-                    {new Date(l.attempted_at).toLocaleString()}
+                    {new Date(l.created_at).toLocaleString()}
                   </span>
                 </div>
               ))}
-              {log.some((l) => !l.success && l.error) && (
+              {log.some((l) => l.status === "failed" && l.last_error) && (
                 <div className="px-3 py-2 text-[10px] text-destructive bg-destructive/5 font-mono break-all">
-                  {log.find((l) => !l.success && l.error)?.error}
+                  {log.find((l) => l.status === "failed" && l.last_error)?.last_error}
                 </div>
               )}
             </div>

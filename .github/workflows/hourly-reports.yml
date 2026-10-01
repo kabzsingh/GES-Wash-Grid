@@ -35,3 +35,14 @@ jobs:
             echo "::error::cleanup-reports returned HTTP $status"
             exit 1
           fi
+
+      - name: Call flush-pulse-queue endpoint
+        run: |
+          response=$(curl -s -L -w "\nHTTP_STATUS:%{http_code}" -X POST \
+            "https://ges-wash-grid.vercel.app/api/public/hooks/flush-pulse-queue")
+          echo "$response"
+          status=$(echo "$response" | grep -o 'HTTP_STATUS:[0-9]*' | cut -d: -f2)
+          if [ "$status" -ge 400 ]; then
+            echo "::error::flush-pulse-queue returned HTTP $status"
+            exit 1
+          fi

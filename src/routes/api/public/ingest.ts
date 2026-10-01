@@ -202,46 +202,27 @@ export const Route = createFileRoute("/api/public/ingest")({
         // Optional server-to-server forward to a third-party system (Pulse),
         // configured per-site via sites.pulse_forward_url. The device itself
         // never knows about this — it only ever talks to this one endpoint,
-        // exactly as before; this relays the exact same payload it sent us.
-        // Deliberately AWAITED (not fire-and-forget) despite adding a little
-        // latency to the device's response: an un-awaited background task
-        // risks being frozen mid-flight the instant Vercel sends our
-        // response (a known gotcha on this platform), which would make the
-        // forward silently never complete. Every attempt — success,
-        // network failure, or a non-2xx response from Pulse itself — is
-        // logged to pulse_forward_log either way, so this is diagnosable.
-        // keyRow.sites comes back as an array, not a single object — the
-        // relationship is marked isOneToOne: false in the generated types,
-        // so PostgREST returns it array-shaped even though in practice
-        // each api key belongs to exactly one site.
+        // exactly as before.
+        //
+        // IMPORTANT: this used to await the actual forward inline, which was
+        // a real mistake — a slow or unresponsive Pulse endpoint could delay
+        // OUR response to the ESP32 well past its own 8-second timeout,
+        // which likely caused the watchdog freeze/reboot loop seen on
+        // Europcar Jetpark's device. A third party's reliability must never
+        // be able to affect the actual equipment data pipeline.
+        //
+        // Now this just queues the payload (a fast, local insert) and
+        // responds to the device immediately. A separate process
+        // (flush-pulse-queue, called by GitHub Actions) does the actual
+        // sending to Pulse on its own schedule, completely decoupled from
+        // any ESP32's request.
         const siteRow = Array.isArray((keyRow as any).sites) ? (keyRow as any).sites[0] : (keyRow as any).sites;
         const pulseUrl = siteRow?.pulse_forward_url as string | null | undefined;
         if (pulseUrl) {
-          try {
-            const res = await fetch(pulseUrl, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(body),
-            });
-            const ok = res.status >= 200 && res.status < 300;
-            let errText: string | null = null;
-            if (!ok) {
-              try { errText = (await res.text()).slice(0, 500); } catch { /* ignore */ }
-            }
-            await db.from("pulse_forward_log").insert({
-              site_id: keyRow.site_id,
-              success: ok,
-              status_code: res.status,
-              error: errText,
-            });
-          } catch (e: any) {
-            await db.from("pulse_forward_log").insert({
-              site_id: keyRow.site_id,
-              success: false,
-              status_code: null,
-              error: e?.message?.slice(0, 500) || String(e),
-            });
-          }
+          await db.from("pulse_forward_queue").insert({
+            site_id: keyRow.site_id,
+            payload: body,
+          });
         }
 
         return json({ 

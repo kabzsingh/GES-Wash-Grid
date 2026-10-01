@@ -19,6 +19,7 @@ import { Route as ApiPublicIngestRouteImport } from './routes/api/public/ingest'
 import { Route as ApiPublicConfigRouteImport } from './routes/api/public/config'
 import { Route as AuthenticatedSitesSiteIdRouteImport } from './routes/_authenticated/sites.$siteId'
 import { Route as ApiPublicHooksSendReportsRouteImport } from './routes/api/public/hooks/send-reports'
+import { Route as ApiPublicHooksFlushPulseQueueRouteImport } from './routes/api/public/hooks/flush-pulse-queue'
 import { Route as ApiPublicHooksCleanupReportsRouteImport } from './routes/api/public/hooks/cleanup-reports'
 import { Route as AuthenticatedSitesSiteIdReportsRouteImport } from './routes/_authenticated/sites.$siteId_.reports'
 
@@ -73,6 +74,12 @@ const ApiPublicHooksSendReportsRoute =
     path: '/api/public/hooks/send-reports',
     getParentRoute: () => rootRouteImport,
   } as any)
+const ApiPublicHooksFlushPulseQueueRoute =
+  ApiPublicHooksFlushPulseQueueRouteImport.update({
+    id: '/api/public/hooks/flush-pulse-queue',
+    path: '/api/public/hooks/flush-pulse-queue',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const ApiPublicHooksCleanupReportsRoute =
   ApiPublicHooksCleanupReportsRouteImport.update({
     id: '/api/public/hooks/cleanup-reports',
@@ -97,6 +104,7 @@ export interface FileRoutesByFullPath {
   '/api/public/ingest': typeof ApiPublicIngestRoute
   '/sites/$siteId/reports': typeof AuthenticatedSitesSiteIdReportsRoute
   '/api/public/hooks/cleanup-reports': typeof ApiPublicHooksCleanupReportsRoute
+  '/api/public/hooks/flush-pulse-queue': typeof ApiPublicHooksFlushPulseQueueRoute
   '/api/public/hooks/send-reports': typeof ApiPublicHooksSendReportsRoute
 }
 export interface FileRoutesByTo {
@@ -110,6 +118,7 @@ export interface FileRoutesByTo {
   '/api/public/ingest': typeof ApiPublicIngestRoute
   '/sites/$siteId/reports': typeof AuthenticatedSitesSiteIdReportsRoute
   '/api/public/hooks/cleanup-reports': typeof ApiPublicHooksCleanupReportsRoute
+  '/api/public/hooks/flush-pulse-queue': typeof ApiPublicHooksFlushPulseQueueRoute
   '/api/public/hooks/send-reports': typeof ApiPublicHooksSendReportsRoute
 }
 export interface FileRoutesById {
@@ -125,6 +134,7 @@ export interface FileRoutesById {
   '/api/public/ingest': typeof ApiPublicIngestRoute
   '/_authenticated/sites/$siteId_/reports': typeof AuthenticatedSitesSiteIdReportsRoute
   '/api/public/hooks/cleanup-reports': typeof ApiPublicHooksCleanupReportsRoute
+  '/api/public/hooks/flush-pulse-queue': typeof ApiPublicHooksFlushPulseQueueRoute
   '/api/public/hooks/send-reports': typeof ApiPublicHooksSendReportsRoute
 }
 export interface FileRouteTypes {
@@ -140,6 +150,7 @@ export interface FileRouteTypes {
     | '/api/public/ingest'
     | '/sites/$siteId/reports'
     | '/api/public/hooks/cleanup-reports'
+    | '/api/public/hooks/flush-pulse-queue'
     | '/api/public/hooks/send-reports'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -153,6 +164,7 @@ export interface FileRouteTypes {
     | '/api/public/ingest'
     | '/sites/$siteId/reports'
     | '/api/public/hooks/cleanup-reports'
+    | '/api/public/hooks/flush-pulse-queue'
     | '/api/public/hooks/send-reports'
   id:
     | '__root__'
@@ -167,6 +179,7 @@ export interface FileRouteTypes {
     | '/api/public/ingest'
     | '/_authenticated/sites/$siteId_/reports'
     | '/api/public/hooks/cleanup-reports'
+    | '/api/public/hooks/flush-pulse-queue'
     | '/api/public/hooks/send-reports'
   fileRoutesById: FileRoutesById
 }
@@ -178,6 +191,7 @@ export interface RootRouteChildren {
   ApiPublicConfigRoute: typeof ApiPublicConfigRoute
   ApiPublicIngestRoute: typeof ApiPublicIngestRoute
   ApiPublicHooksCleanupReportsRoute: typeof ApiPublicHooksCleanupReportsRoute
+  ApiPublicHooksFlushPulseQueueRoute: typeof ApiPublicHooksFlushPulseQueueRoute
   ApiPublicHooksSendReportsRoute: typeof ApiPublicHooksSendReportsRoute
 }
 
@@ -253,6 +267,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiPublicHooksSendReportsRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/public/hooks/flush-pulse-queue': {
+      id: '/api/public/hooks/flush-pulse-queue'
+      path: '/api/public/hooks/flush-pulse-queue'
+      fullPath: '/api/public/hooks/flush-pulse-queue'
+      preLoaderRoute: typeof ApiPublicHooksFlushPulseQueueRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/public/hooks/cleanup-reports': {
       id: '/api/public/hooks/cleanup-reports'
       path: '/api/public/hooks/cleanup-reports'
@@ -296,6 +317,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiPublicConfigRoute: ApiPublicConfigRoute,
   ApiPublicIngestRoute: ApiPublicIngestRoute,
   ApiPublicHooksCleanupReportsRoute: ApiPublicHooksCleanupReportsRoute,
+  ApiPublicHooksFlushPulseQueueRoute: ApiPublicHooksFlushPulseQueueRoute,
   ApiPublicHooksSendReportsRoute: ApiPublicHooksSendReportsRoute,
 }
 export const routeTree = rootRouteImport
