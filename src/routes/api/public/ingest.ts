@@ -219,10 +219,19 @@ export const Route = createFileRoute("/api/public/ingest")({
         const siteRow = Array.isArray((keyRow as any).sites) ? (keyRow as any).sites[0] : (keyRow as any).sites;
         const pulseUrl = siteRow?.pulse_forward_url as string | null | undefined;
         if (pulseUrl) {
-          await db.from("pulse_forward_queue").insert({
-            site_id: keyRow.site_id,
-            payload: body,
-          });
+          // Wrapped: this insert must NEVER be able to affect the response
+          // below. The readings themselves are already safely saved by
+          // this point — a problem queuing a Pulse forward is a reason to
+          // log and move on, not a reason to fail the whole request back
+          // to a physical device that has nothing to do with Pulse at all.
+          try {
+            await db.from("pulse_forward_queue").insert({
+              site_id: keyRow.site_id,
+              payload: body,
+            });
+          } catch (e: any) {
+            console.error(`Failed to queue Pulse forward for site ${keyRow.site_id}:`, e?.message || e);
+          }
         }
 
         return json({ 
