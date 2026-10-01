@@ -2219,10 +2219,19 @@ void setup() {
   }
 
   connectWifi();
-  if (WiFi.status() == WL_CONNECTED) {
-    checkInForConfig();
-    lastConfigCheckMs = millis();
-  }
+  // checkInForConfig() temporarily disabled — on-site testing showed it can
+  // hang so severely (likely deep inside the TLS handshake library itself)
+  // that it defeats even the hardware watchdog, with NO reboot occurring at
+  // all even after several minutes stuck. This is a more serious class of
+  // bug than a simple missing timeout, and isn't something a timeout
+  // parameter alone reliably fixes. Disabled here so the device can reach
+  // its actual job (reading and sending meter data) reliably, at the cost
+  // of losing the "change poll interval without reflashing" convenience
+  // for now. Poll interval falls back to the value hardcoded below.
+  // if (WiFi.status() == WL_CONNECTED) {
+  //   checkInForConfig();
+  //   lastConfigCheckMs = millis();
+  // }
 }
 
 void loop() {
@@ -2243,10 +2252,11 @@ void loop() {
 
   unsigned long now = millis();
 
-  if (WiFi.status() == WL_CONNECTED && now - lastConfigCheckMs >= CONFIG_CHECK_INTERVAL_MS) {
-    lastConfigCheckMs = now;
-    checkInForConfig();
-  }
+  // checkInForConfig() disabled here too — see setup() above for why.
+  // if (WiFi.status() == WL_CONNECTED && now - lastConfigCheckMs >= CONFIG_CHECK_INTERVAL_MS) {
+  //   lastConfigCheckMs = now;
+  //   checkInForConfig();
+  // }
 
   if (now - lastPollMs >= POLL_INTERVAL_MS) {
     lastPollMs = now;
