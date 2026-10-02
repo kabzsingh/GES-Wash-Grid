@@ -9,23 +9,27 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
-import { Route as SignupRouteImport } from './routes/signup'
-import { Route as LoginRouteImport } from './routes/login'
-import { Route as AuthenticatedRouteImport } from './routes/_authenticated'
 import { Route as IndexRouteImport } from './routes/index'
-import { Route as AuthenticatedDashboardRouteImport } from './routes/_authenticated/dashboard'
+import { Route as AuthenticatedRouteImport } from './routes/_authenticated'
+import { Route as LoginRouteImport } from './routes/login'
+import { Route as SignupRouteImport } from './routes/signup'
 import { Route as AuthenticatedAdminRouteImport } from './routes/_authenticated/admin'
-import { Route as ApiPublicIngestRouteImport } from './routes/api/public/ingest'
-import { Route as ApiPublicConfigRouteImport } from './routes/api/public/config'
+import { Route as AuthenticatedDashboardRouteImport } from './routes/_authenticated/dashboard'
 import { Route as AuthenticatedSitesSiteIdRouteImport } from './routes/_authenticated/sites.$siteId'
-import { Route as ApiPublicHooksSendReportsRouteImport } from './routes/api/public/hooks/send-reports'
-import { Route as ApiPublicHooksFlushPulseQueueRouteImport } from './routes/api/public/hooks/flush-pulse-queue'
-import { Route as ApiPublicHooksCleanupReportsRouteImport } from './routes/api/public/hooks/cleanup-reports'
+import { Route as ApiPublicConfigRouteImport } from './routes/api/public/config'
+import { Route as ApiPublicIngestRouteImport } from './routes/api/public/ingest'
 import { Route as AuthenticatedSitesSiteIdReportsRouteImport } from './routes/_authenticated/sites.$siteId_.reports'
+import { Route as ApiPublicHooksCleanupReportsRouteImport } from './routes/api/public/hooks/cleanup-reports'
+import { Route as ApiPublicHooksFlushPulseQueueRouteImport } from './routes/api/public/hooks/flush-pulse-queue'
+import { Route as ApiPublicHooksSendReportsRouteImport } from './routes/api/public/hooks/send-reports'
 
-const SignupRoute = SignupRouteImport.update({
-  id: '/signup',
-  path: '/signup',
+const IndexRoute = IndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AuthenticatedRoute = AuthenticatedRouteImport.update({
+  id: '/_authenticated',
   getParentRoute: () => rootRouteImport,
 } as any)
 const LoginRoute = LoginRouteImport.update({
@@ -33,34 +37,20 @@ const LoginRoute = LoginRouteImport.update({
   path: '/login',
   getParentRoute: () => rootRouteImport,
 } as any)
-const AuthenticatedRoute = AuthenticatedRouteImport.update({
-  id: '/_authenticated',
+const SignupRoute = SignupRouteImport.update({
+  id: '/signup',
+  path: '/signup',
   getParentRoute: () => rootRouteImport,
-} as any)
-const IndexRoute = IndexRouteImport.update({
-  id: '/',
-  path: '/',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const AuthenticatedDashboardRoute = AuthenticatedDashboardRouteImport.update({
-  id: '/dashboard',
-  path: '/dashboard',
-  getParentRoute: () => AuthenticatedRoute,
 } as any)
 const AuthenticatedAdminRoute = AuthenticatedAdminRouteImport.update({
   id: '/admin',
   path: '/admin',
   getParentRoute: () => AuthenticatedRoute,
 } as any)
-const ApiPublicIngestRoute = ApiPublicIngestRouteImport.update({
-  id: '/api/public/ingest',
-  path: '/api/public/ingest',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiPublicConfigRoute = ApiPublicConfigRouteImport.update({
-  id: '/api/public/config',
-  path: '/api/public/config',
-  getParentRoute: () => rootRouteImport,
+const AuthenticatedDashboardRoute = AuthenticatedDashboardRouteImport.update({
+  id: '/dashboard',
+  path: '/dashboard',
+  getParentRoute: () => AuthenticatedRoute,
 } as any)
 const AuthenticatedSitesSiteIdRoute =
   AuthenticatedSitesSiteIdRouteImport.update({
@@ -68,10 +58,26 @@ const AuthenticatedSitesSiteIdRoute =
     path: '/sites/$siteId',
     getParentRoute: () => AuthenticatedRoute,
   } as any)
-const ApiPublicHooksSendReportsRoute =
-  ApiPublicHooksSendReportsRouteImport.update({
-    id: '/api/public/hooks/send-reports',
-    path: '/api/public/hooks/send-reports',
+const ApiPublicConfigRoute = ApiPublicConfigRouteImport.update({
+  id: '/api/public/config',
+  path: '/api/public/config',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiPublicIngestRoute = ApiPublicIngestRouteImport.update({
+  id: '/api/public/ingest',
+  path: '/api/public/ingest',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AuthenticatedSitesSiteIdReportsRoute =
+  AuthenticatedSitesSiteIdReportsRouteImport.update({
+    id: '/sites/$siteId_/reports',
+    path: '/sites/$siteId/reports',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
+const ApiPublicHooksCleanupReportsRoute =
+  ApiPublicHooksCleanupReportsRouteImport.update({
+    id: '/api/public/hooks/cleanup-reports',
+    path: '/api/public/hooks/cleanup-reports',
     getParentRoute: () => rootRouteImport,
   } as any)
 const ApiPublicHooksFlushPulseQueueRoute =
@@ -80,17 +86,11 @@ const ApiPublicHooksFlushPulseQueueRoute =
     path: '/api/public/hooks/flush-pulse-queue',
     getParentRoute: () => rootRouteImport,
   } as any)
-const ApiPublicHooksCleanupReportsRoute =
-  ApiPublicHooksCleanupReportsRouteImport.update({
-    id: '/api/public/hooks/cleanup-reports',
-    path: '/api/public/hooks/cleanup-reports',
+const ApiPublicHooksSendReportsRoute =
+  ApiPublicHooksSendReportsRouteImport.update({
+    id: '/api/public/hooks/send-reports',
+    path: '/api/public/hooks/send-reports',
     getParentRoute: () => rootRouteImport,
-  } as any)
-const AuthenticatedSitesSiteIdReportsRoute =
-  AuthenticatedSitesSiteIdReportsRouteImport.update({
-    id: '/sites/$siteId_/reports',
-    path: '/sites/$siteId/reports',
-    getParentRoute: () => AuthenticatedRoute,
   } as any)
 
 export interface FileRoutesByFullPath {
@@ -197,18 +197,11 @@ export interface RootRouteChildren {
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
-    '/signup': {
-      id: '/signup'
-      path: '/signup'
-      fullPath: '/signup'
-      preLoaderRoute: typeof SignupRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/login': {
-      id: '/login'
-      path: '/login'
-      fullPath: '/login'
-      preLoaderRoute: typeof LoginRouteImport
+    '/': {
+      id: '/'
+      path: '/'
+      fullPath: '/'
+      preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/_authenticated': {
@@ -218,19 +211,19 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/': {
-      id: '/'
-      path: '/'
-      fullPath: '/'
-      preLoaderRoute: typeof IndexRouteImport
+    '/login': {
+      id: '/login'
+      path: '/login'
+      fullPath: '/login'
+      preLoaderRoute: typeof LoginRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/_authenticated/dashboard': {
-      id: '/_authenticated/dashboard'
-      path: '/dashboard'
-      fullPath: '/dashboard'
-      preLoaderRoute: typeof AuthenticatedDashboardRouteImport
-      parentRoute: typeof AuthenticatedRoute
+    '/signup': {
+      id: '/signup'
+      path: '/signup'
+      fullPath: '/signup'
+      preLoaderRoute: typeof SignupRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/_authenticated/admin': {
       id: '/_authenticated/admin'
@@ -239,19 +232,12 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedAdminRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
-    '/api/public/ingest': {
-      id: '/api/public/ingest'
-      path: '/api/public/ingest'
-      fullPath: '/api/public/ingest'
-      preLoaderRoute: typeof ApiPublicIngestRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/public/config': {
-      id: '/api/public/config'
-      path: '/api/public/config'
-      fullPath: '/api/public/config'
-      preLoaderRoute: typeof ApiPublicConfigRouteImport
-      parentRoute: typeof rootRouteImport
+    '/_authenticated/dashboard': {
+      id: '/_authenticated/dashboard'
+      path: '/dashboard'
+      fullPath: '/dashboard'
+      preLoaderRoute: typeof AuthenticatedDashboardRouteImport
+      parentRoute: typeof AuthenticatedRoute
     }
     '/_authenticated/sites/$siteId': {
       id: '/_authenticated/sites/$siteId'
@@ -260,11 +246,32 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedSitesSiteIdRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
-    '/api/public/hooks/send-reports': {
-      id: '/api/public/hooks/send-reports'
-      path: '/api/public/hooks/send-reports'
-      fullPath: '/api/public/hooks/send-reports'
-      preLoaderRoute: typeof ApiPublicHooksSendReportsRouteImport
+    '/api/public/config': {
+      id: '/api/public/config'
+      path: '/api/public/config'
+      fullPath: '/api/public/config'
+      preLoaderRoute: typeof ApiPublicConfigRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/public/ingest': {
+      id: '/api/public/ingest'
+      path: '/api/public/ingest'
+      fullPath: '/api/public/ingest'
+      preLoaderRoute: typeof ApiPublicIngestRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/_authenticated/sites/$siteId_/reports': {
+      id: '/_authenticated/sites/$siteId_/reports'
+      path: '/sites/$siteId/reports'
+      fullPath: '/sites/$siteId/reports'
+      preLoaderRoute: typeof AuthenticatedSitesSiteIdReportsRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/api/public/hooks/cleanup-reports': {
+      id: '/api/public/hooks/cleanup-reports'
+      path: '/api/public/hooks/cleanup-reports'
+      fullPath: '/api/public/hooks/cleanup-reports'
+      preLoaderRoute: typeof ApiPublicHooksCleanupReportsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/public/hooks/flush-pulse-queue': {
@@ -274,19 +281,12 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiPublicHooksFlushPulseQueueRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/public/hooks/cleanup-reports': {
-      id: '/api/public/hooks/cleanup-reports'
-      path: '/api/public/hooks/cleanup-reports'
-      fullPath: '/api/public/hooks/cleanup-reports'
-      preLoaderRoute: typeof ApiPublicHooksCleanupReportsRouteImport
+    '/api/public/hooks/send-reports': {
+      id: '/api/public/hooks/send-reports'
+      path: '/api/public/hooks/send-reports'
+      fullPath: '/api/public/hooks/send-reports'
+      preLoaderRoute: typeof ApiPublicHooksSendReportsRouteImport
       parentRoute: typeof rootRouteImport
-    }
-    '/_authenticated/sites/$siteId_/reports': {
-      id: '/_authenticated/sites/$siteId_/reports'
-      path: '/sites/$siteId/reports'
-      fullPath: '/sites/$siteId/reports'
-      preLoaderRoute: typeof AuthenticatedSitesSiteIdReportsRouteImport
-      parentRoute: typeof AuthenticatedRoute
     }
   }
 }
