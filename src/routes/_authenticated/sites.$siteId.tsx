@@ -456,7 +456,9 @@ function SiteDetail() {
 
   const bestTs = [esp32LastSeen, lastSeenTs].filter(Boolean).sort().reverse()[0] ?? null;
   const ago = bestTs ? Math.max(0, Math.floor((now - new Date(bestTs).getTime()) / 1000)) : null;
-  const isOnline = ago !== null && ago < 90;
+  // Online if data arrived in the last 15 minutes (ago is in seconds).
+  // Keep in sync with the dashboard's online check.
+  const isOnline = ago !== null && ago < 15 * 60;
   const agoLabel = ago === null ? "never" :
     ago < 5 ? "just now" :
     ago < 60 ? `${ago}s ago` :

@@ -186,7 +186,10 @@ function DashboardPage() {
 
         const now = new Date().getTime();
         const lastSeenTime = lastSeen ? new Date(lastSeen).getTime() : 0;
-        const online = now - lastSeenTime < 5 * 60 * 1000;
+        // Online if data arrived in the last 15 minutes. Devices poll every
+        // 10 minutes, so this allows one reading plus a few minutes' slack
+        // before a site is shown as Offline. Keep in sync with sites.$siteId.tsx.
+        const online = now - lastSeenTime < 15 * 60 * 1000;
 
         return {
           id: site.id,
