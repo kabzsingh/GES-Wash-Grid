@@ -1649,16 +1649,18 @@ function buildEsp32Sketch(site: Site, meters: Meter[]) {
     : "";
 
   const sketch = `// Auto-generated for site: ${site.name}
-// "Bulletproof" version — hardened for unattended field operation.
+// Field-proven version — this is the exact sketch confirmed working on-site
+// at Europcar Jetpark (02 Oct 2026). Keep networking changes minimal, and
+// test any change on real hardware before rolling it out.
 //
-// Reads ${configured.length} meter value(s) from the Delta HMI/PLC over Modbus TCP
+// Reads ${configured.length} meter values from the Delta HMI/PLC over Modbus TCP
 // (the HMI acts as a Modbus TCP Server on port 502, exposing PLC
 // D-registers via the Modbus TCP Mapping Table configured in DOPSoft),
 // then POSTs them over HTTPS to the wash dashboard ingest API.
 //
 // === MODBUS MAPPING (from DOPSoft Modbus TCP Mapping Table) ===
 ${mappingComment}
-${missingComment}
+${missingComment}//
 // IMPORTANT: word order (high/low) for 32-bit values is uncertain.
 // This tries LOW-word-first (register N = low 16 bits, N+1 = high 16
 // bits), Delta's typical default. If a reading looks wildly wrong vs
@@ -1668,32 +1670,8 @@ ${missingComment}
 // (e.g. 3025). The wire protocol is 0-based, so 3025 in the table
 // means we request address 3024. This -1 offset is already applied.
 //
-// === HARDENING NOTES (what makes this "bulletproof") ===
-//  1. HTTPS actually works: HTTPClient on ESP32 needs an explicit
-//     WiFiClientSecure attached via http.begin(client, url) for
-//     https:// URLs to connect reliably. setInsecure() skips cert
-//     validation (fine for this use case; the endpoint isn't handling
-//     anything more sensitive than meter counts and an API key header).
-//  2. Modbus reads retry up to MODBUS_MAX_RETRIES times before a
-//     meter is marked failed for this cycle.
-//  3. A hardware watchdog reboots the device if the main loop ever
-//     stalls (bad socket state, driver lockup, etc.) for more than
-//     WDT_TIMEOUT_S seconds.
-//  4. WiFi reconnect uses backoff instead of hammering reconnect in
-//     a tight loop when WiFi is down for an extended period.
-//  5. The Modbus TCP socket is proactively closed/reopened every
-//     SOCKET_REFRESH_CYCLES polls, since some Delta HMIs silently
-//     let long-held sockets go stale without sending a FIN/RST.
-//  6. Offline queue (SPIFFS) still buffers readings if the network
-//     or API is down, and is capped at MAX_FILE_LINES. Queue lines are
-//     removed by how many were actually PROCESSED (sent, skipped-empty,
-//     corrupt, or all-failed), not just how many sent successfully — a
-//     skipped line ahead of a sent one would otherwise cause that sent
-//     line to be left behind and duplicated on the next flush.
-//  7. Free heap is checked every loop; if it drops below
-//     MIN_FREE_HEAP_BYTES the device reboots itself proactively, rather
-//     than risking an eventual out-of-memory crash from fragmentation
-//     during unattended weeks/months of uptime.
+// Poll interval is set in Admin (this site > ESP32 Poll Interval) and baked
+// in when this sketch is generated. Changing it requires a reflash.
 //
 // ============================================================
 // TODO BEFORE FLASHING — fill in the values below from the dashboard:
@@ -1709,36 +1687,30 @@ ${missingComment}
 #include <ArduinoJson.h>
 #include <esp_task_wdt.h>
 
-const char* WIFI_SSID    = "";                          // TODO: ${site.name} WiFi SSID
-const char* WIFI_PASS    = "";                          // TODO: ${site.name} WiFi password
-const char* SITE_API_KEY = "";                          // TODO: dashboard API key for ${site.name} (generate in Admin > this site > API Keys)
+const char* WIFI_SSID    = "";                 // TODO: site WiFi SSID
+const char* WIFI_PASS    = "";                 // TODO: site WiFi password
+const char* SITE_API_KEY = "";                 // TODO: dashboard API key for this site
 const char* INGEST_URL   = "${endpoint}";
 const char* QUEUE_FILE   = "/queue.jsonl";
 
 // HMI acting as Modbus TCP Server
-const char* HMI_IP = "";   // TODO: ${site.name} HMI/PLC IP, e.g. "192.168.8.10"
+const char* HMI_IP = "";   // TODO: e.g. "192.168.8.10"
 const int   MODBUS_PORT = 502;
 
-// Poll interval is baked in when the sketch is generated (Admin -> this site
-// -> ESP32 Poll Interval). Changing it in Admin requires regenerating and
-// reflashing this sketch.
 const unsigned long POLL_INTERVAL_MS   = ${pollIntervalSeconds}UL * 1000UL; // how often to read + send
 const int           MAX_FILE_LINES     = 5000;
 const int           MODBUS_MAX_RETRIES = 3;              // per-register retry attempts
-const int           SOCKET_REFRESH_CYCLES = 40;           // ~10 min at 15s interval
+const int           SOCKET_REFRESH_CYCLES = 40;           // refresh Modbus socket every 40 polls
 const unsigned long WDT_TIMEOUT_S      = 30;              // reboot if loop stalls this long
 const unsigned long WIFI_RETRY_BASE_MS = 2000;            // backoff base for WiFi reconnect
 const unsigned long WIFI_RETRY_MAX_MS  = 60000;           // cap backoff at 60s
-const uint32_t      MIN_FREE_HEAP_BYTES = 20000;          // proactively reboot below this, rather than risk an eventual crash from fragmentation over weeks of uptime
 
 WiFiClient modbusSocket;
 uint16_t modbusTransactionId = 0;
 unsigned long lastPollMs = 0;
-bool firstPollDone = false; // first reading happens right after boot, not 10 min later
 int pollsSinceSocketOpen = 0;
 unsigned long wifiRetryDelay = WIFI_RETRY_BASE_MS;
 unsigned long lastWifiAttemptMs = 0;
-bool spiffsAvailable = false; // set in setup(); guards all offline-queue file access
 
 // ===== Modbus register map =====
 // modbusAddr is already 0-based (mapping table address minus 1).
@@ -1761,11 +1733,7 @@ uint32_t combineWords(uint16_t lo, uint16_t hi) {
 }
 
 // ===== SPIFFS helpers (offline-buffering pattern) =====
-// All guarded by spiffsAvailable — if SPIFFS failed to mount in setup(),
-// these become no-ops and loop() falls back to sending readings live
-// instead of queuing them (see loop() below).
 void appendToQueue(uint32_t values[], bool ok[], int count) {
-  if (!spiffsAvailable) return;
   File f = SPIFFS.open(QUEUE_FILE, FILE_APPEND);
   if (!f) { Serial.println("Failed to open queue"); return; }
   f.print("{");
@@ -1778,7 +1746,6 @@ void appendToQueue(uint32_t values[], bool ok[], int count) {
 }
 
 int countQueueLines() {
-  if (!spiffsAvailable) return 0;
   File f = SPIFFS.open(QUEUE_FILE, FILE_READ);
   if (!f) return 0;
   int c = 0;
@@ -1788,7 +1755,6 @@ int countQueueLines() {
 }
 
 void removeFirstLines(int n) {
-  if (!spiffsAvailable) return;
   File src = SPIFFS.open(QUEUE_FILE, FILE_READ);
   File tmp = SPIFFS.open("/tmp.jsonl", FILE_WRITE);
   if (!src || !tmp) return;
@@ -1801,21 +1767,6 @@ void removeFirstLines(int n) {
   src.close(); tmp.close();
   SPIFFS.remove(QUEUE_FILE);
   SPIFFS.rename("/tmp.jsonl", QUEUE_FILE);
-}
-
-// Builds the ingest JSON payload directly from live meter readings (used
-// when SPIFFS isn't available, bypassing the on-disk queue entirely).
-String buildPayloadFromLive(uint32_t values[], bool ok[]) {
-  String payload = "{\\"readings\\":[";
-  bool first = true;
-  for (int i = 0; i < NUM_METERS; i++) {
-    if (!ok[i]) continue;
-    if (!first) payload += ",";
-    payload += "{\\"device_key\\":\\"" + String(meters[i].deviceKey) + "\\",\\"value\\":" + String(values[i]) + "}";
-    first = false;
-  }
-  payload += "]}";
-  return payload;
 }
 
 // ===== WiFi with backoff =====
@@ -1848,39 +1799,10 @@ void connectWifi() {
   }
 }
 
-// ===== HTTPS send (fixed: explicit WiFiClientSecure so https:// actually connects) =====
-// Extracts just the hostname from a "https://host/path" URL string, for
-// use with WiFiClientSecure::connect(host, port, timeout) below.
-String extractHost(const char* url) {
-  String s(url);
-  s.replace("https://", "");
-  s.replace("http://", "");
-  int slash = s.indexOf('/');
-  if (slash >= 0) s = s.substring(0, slash);
-  return s;
-}
-
+// ===== HTTPS send =====
 bool postPayload(const String& payload) {
   WiFiClientSecure client;
   client.setInsecure(); // no cert pinning needed for this endpoint/use case
-
-  // Connect explicitly with a timeout BEFORE handing the client to
-  // HTTPClient — this is the proven-correct pattern (same as the Modbus
-  // fix). HTTPClient::begin()/POST() otherwise establishes the connection
-  // itself internally when the request is actually sent, which does NOT
-  // reliably respect a timeout set via client.setTimeout() beforehand on
-  // every ESP32 core version — confirmed by the exact same freeze-after-
-  // WiFi-connects symptom recurring on a brand new board even after that
-  // fix. Connecting first ourselves, with an explicit timeout, means
-  // HTTPClient detects the already-open connection and skips its own
-  // internal (unbounded) connect attempt entirely.
-  esp_task_wdt_reset();
-  bool connected = client.connect(extractHost(INGEST_URL).c_str(), 443, 8000);
-  esp_task_wdt_reset();
-  if (!connected) {
-    Serial.println("postPayload: connect failed/timed out");
-    return false;
-  }
 
   HTTPClient http;
   if (!http.begin(client, INGEST_URL)) {
@@ -1890,9 +1812,7 @@ bool postPayload(const String& payload) {
   http.addHeader("Content-Type", "application/json");
   http.addHeader("x-site-api-key", SITE_API_KEY);
   http.setTimeout(8000);
-  esp_task_wdt_reset();
   int code = http.POST(payload);
-  esp_task_wdt_reset();
   http.end();
 
   if (code == 200) return true;
@@ -1901,20 +1821,15 @@ bool postPayload(const String& payload) {
 }
 
 void flushQueue() {
-  if (!spiffsAvailable) return;
   File f = SPIFFS.open(QUEUE_FILE, FILE_READ);
   if (!f || f.size() == 0) { if (f) f.close(); return; }
   int sent = 0;
-  int processed = 0; // every line consumed from the top, whether sent, skipped, or corrupt —
-                      // this (not just the sent count) is what removeFirstLines() must use
-                      // below, or a blank/corrupt/all-failed line ahead of a good one causes
-                      // the good line to be left in the queue and re-sent again next cycle.
   while (f.available()) {
     String line = f.readStringUntil('\\n');
     line.trim();
-    if (line.length() == 0) { processed++; continue; }
+    if (line.length() == 0) continue;
     StaticJsonDocument<512> doc;
-    if (deserializeJson(doc, line)) { processed++; continue; }
+    if (deserializeJson(doc, line)) continue;
 
     String payload = "{\\"readings\\":[";
     bool first = true;
@@ -1934,23 +1849,22 @@ void flushQueue() {
     }
     payload += "]}";
 
-    if (first) { processed++; continue; } // every reading in this queued line failed
+    if (first) continue; // every reading in this queued line failed
 
     if (WiFi.status() != WL_CONNECTED) connectWifi();
-    if (WiFi.status() != WL_CONNECTED) break; // don't count this line — not yet attempted
+    if (WiFi.status() != WL_CONNECTED) break;
 
     if (postPayload(payload)) {
       sent++;
-      processed++;
     } else {
-      break; // stop on first failure — don't count this line, retry it next cycle
+      break; // stop on first failure, retry whole remaining queue next cycle
     }
     esp_task_wdt_reset();
   }
   f.close();
-  if (processed > 0) {
-    if (sent > 0) Serial.printf("Flushed %d records\\n", sent);
-    removeFirstLines(processed);
+  if (sent > 0) {
+    Serial.printf("Flushed %d records\\n", sent);
+    removeFirstLines(sent);
   }
 }
 
@@ -1961,16 +1875,7 @@ bool ensureModbusConnected(bool forceReconnect = false) {
   if (modbusSocket.connected()) return true;
 
   Serial.print("Connecting to HMI Modbus TCP...");
-  esp_task_wdt_reset();
-  // Explicit timeout (ms) passed directly to connect() — same lesson as
-  // postPayload(): a generic setTimeout() call doesn't
-  // reliably bound the connection attempt itself on every ESP32 core
-  // version. If the HMI's network ever silently drops packets rather than
-  // actively refusing the connection (a dead HMI, a flaky switch/cable),
-  // this could otherwise hang well past the watchdog's budget.
-  bool connected = modbusSocket.connect(HMI_IP, MODBUS_PORT, 3000);
-  esp_task_wdt_reset();
-  if (!connected) {
+  if (!modbusSocket.connect(HMI_IP, MODBUS_PORT)) {
     Serial.println(" FAILED");
     return false;
   }
@@ -1987,13 +1892,9 @@ bool modbusReadHoldingRegistersOnce(uint16_t startAddr, uint16_t numRegs, uint16
   if (!ensureModbusConnected()) return false;
 
   // Flush any stale/leftover bytes sitting in the socket buffer from a
-  // previous slow response before sending a new request. Bounded and
-  // watchdog-safe even in the unlikely case data keeps arriving continuously.
-  int flushGuard = 0;
-  while (modbusSocket.available() && flushGuard < 10000) {
+  // previous slow response before sending a new request.
+  while (modbusSocket.available()) {
     modbusSocket.read();
-    flushGuard++;
-    if (flushGuard % 1000 == 0) esp_task_wdt_reset();
   }
 
   modbusTransactionId++;
@@ -2109,54 +2010,16 @@ void setup() {
   delay(500);
 
   // Hardware watchdog: reboot automatically if the loop ever stalls.
-  //
-  // NOTE: newer Arduino-ESP32 cores (3.x, ESP-IDF 5.x) already auto-init the
-  // Task Watchdog Timer for the idle tasks before setup() ever runs. Calling
-  // esp_task_wdt_init() again on top of that returns ESP_ERR_INVALID_STATE
-  // ("TWDT already initialized") — reconfigure the existing one instead of
-  // treating that as a fatal error.
   esp_task_wdt_config_t wdtConfig = {
     .timeout_ms = WDT_TIMEOUT_S * 1000,
     .idle_core_mask = 0,
     .trigger_panic = true
   };
-  esp_err_t wdtInitErr = esp_task_wdt_init(&wdtConfig);
-  if (wdtInitErr == ESP_ERR_INVALID_STATE) {
-    esp_task_wdt_reconfigure(&wdtConfig);
-  } else if (wdtInitErr != ESP_OK) {
-    Serial.printf("WDT init returned %d (continuing)\\n", wdtInitErr);
-  }
-  esp_err_t wdtAddErr = esp_task_wdt_add(NULL);
-  if (wdtAddErr != ESP_OK && wdtAddErr != ESP_ERR_INVALID_ARG) {
-    Serial.printf("WDT add returned %d (continuing)\\n", wdtAddErr);
-  }
+  esp_task_wdt_init(&wdtConfig);
+  esp_task_wdt_add(NULL);
 
-  // SPIFFS mount, with an explicit format-and-retry if the first mount
-  // fails (error -10025 / SPIFFS_ERR_NOT_A_FS means the flash region isn't
-  // a valid filesystem yet — first boot on a fresh chip, or the previous
-  // partition table used a different filesystem there).
-  //
-  // If SPIFFS still isn't available after that (e.g. the board's Partition
-  // Scheme in Tools menu doesn't actually allocate a SPIFFS partition), the
-  // device keeps running WITHOUT the offline queue: readings are sent live
-  // each cycle and simply dropped (not buffered) if the network is down,
-  // rather than the whole device being non-functional.
-  if (SPIFFS.begin(true)) {
-    spiffsAvailable = true;
-  } else {
-    Serial.println("SPIFFS mount failed, formatting...");
-    if (SPIFFS.format() && SPIFFS.begin(true)) {
-      spiffsAvailable = true;
-      Serial.println("SPIFFS formatted and mounted OK");
-    } else {
-      spiffsAvailable = false;
-      Serial.println("SPIFFS unavailable — running WITHOUT offline queue buffering.");
-      Serial.println("Check Tools > Partition Scheme in Arduino IDE: pick a scheme that includes a SPIFFS partition (e.g. 'Default 4MB with spiffs').");
-    }
-  }
-  if (spiffsAvailable) {
-    Serial.printf("SPIFFS OK — %u bytes free\\n", SPIFFS.totalBytes() - SPIFFS.usedBytes());
-  }
+  if (!SPIFFS.begin(true)) Serial.println("SPIFFS mount failed!");
+  else Serial.printf("SPIFFS OK — %u bytes free\\n", SPIFFS.totalBytes() - SPIFFS.usedBytes());
 
   connectWifi();
 }
@@ -2164,43 +2027,18 @@ void setup() {
 void loop() {
   esp_task_wdt_reset();
 
-  // Devices left running unattended for weeks/months can suffer heap
-  // fragmentation from long-running WiFi/TLS/HTTP activity. Rebooting
-  // proactively while still responsive is far safer than waiting for an
-  // eventual out-of-memory crash at some unpredictable, unattended moment.
-  uint32_t freeHeap = ESP.getFreeHeap();
-  if (freeHeap < MIN_FREE_HEAP_BYTES) {
-    Serial.printf("Free heap critically low (%u bytes) — rebooting proactively\\n", freeHeap);
-    delay(100); // let the Serial print actually flush before restart
-    ESP.restart();
-  }
-
   if (WiFi.status() != WL_CONNECTED) connectWifi();
 
   unsigned long now = millis();
-
-  if (!firstPollDone || now - lastPollMs >= POLL_INTERVAL_MS) {
-    firstPollDone = true;
+  if (now - lastPollMs >= POLL_INTERVAL_MS) {
     lastPollMs = now;
 
     uint32_t values[NUM_METERS];
     bool ok[NUM_METERS];
     readAllMeters(values, ok); // fills what it can; failed reads are marked not-ok
-
-    if (spiffsAvailable) {
-      if (countQueueLines() >= MAX_FILE_LINES) removeFirstLines(100);
-      appendToQueue(values, ok, NUM_METERS);
-      flushQueue();
-    } else {
-      // No offline buffering available this boot — send directly. If this
-      // fails (WiFi/API down), this cycle's reading is simply skipped
-      // rather than queued, since there's nowhere to persist it.
-      bool anyOk = false;
-      for (int i = 0; i < NUM_METERS; i++) if (ok[i]) { anyOk = true; break; }
-      if (anyOk && WiFi.status() == WL_CONNECTED) {
-        postPayload(buildPayloadFromLive(values, ok));
-      }
-    }
+    if (countQueueLines() >= MAX_FILE_LINES) removeFirstLines(100);
+    appendToQueue(values, ok, NUM_METERS);
+    flushQueue();
   }
 
   delay(10);
