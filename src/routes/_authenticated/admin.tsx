@@ -1615,7 +1615,6 @@ function ReportSettings({ site, onSaved }: { site: Site; onSaved: () => void }) 
 
 function buildEsp32Sketch(site: Site, meters: Meter[]) {
   const endpoint = `${typeof window !== "undefined" ? window.location.origin : "https://your-deployment-url.com"}/api/public/ingest`;
-  const configEndpoint = `${typeof window !== "undefined" ? window.location.origin : "https://your-deployment-url.com"}/api/public/config`;
   const pollIntervalSeconds = site.poll_interval_seconds ?? 15;
 
   // Only meters with an HMI Modbus Address configured (in Admin > Meter &
@@ -1691,11 +1690,7 @@ ${missingComment}
 //     corrupt, or all-failed), not just how many sent successfully — a
 //     skipped line ahead of a sent one would otherwise cause that sent
 //     line to be left behind and duplicated on the next flush.
-//  7. Remote config check-in (once at boot, hourly after) pulls current
-//     settings like poll interval from the dashboard, so changes made in
-//     Admin apply without a reflash. Falls back to the last-known value
-//     if a check-in fails, rather than blocking normal operation.
-//  8. Free heap is checked every loop; if it drops below
+//  7. Free heap is checked every loop; if it drops below
 //     MIN_FREE_HEAP_BYTES the device reboots itself proactively, rather
 //     than risking an eventual out-of-memory crash from fragmentation
 //     during unattended weeks/months of uptime.
@@ -1718,19 +1713,16 @@ const char* WIFI_SSID    = "";                          // TODO: ${site.name} Wi
 const char* WIFI_PASS    = "";                          // TODO: ${site.name} WiFi password
 const char* SITE_API_KEY = "";                          // TODO: dashboard API key for ${site.name} (generate in Admin > this site > API Keys)
 const char* INGEST_URL   = "${endpoint}";
-const char* CONFIG_URL   = "${configEndpoint}";
 const char* QUEUE_FILE   = "/queue.jsonl";
 
 // HMI acting as Modbus TCP Server
 const char* HMI_IP = "";   // TODO: ${site.name} HMI/PLC IP, e.g. "192.168.8.10"
 const int   MODBUS_PORT = 502;
 
-// Poll interval starts at this value, but is NOT a hardcoded constant —
-// checkInForConfig() below overwrites it periodically from the dashboard's
-// current setting (Admin -> this site -> ESP32 Poll Interval), so changing
-// it there takes effect on this device's next check-in, no reflash needed.
-unsigned long POLL_INTERVAL_MS   = ${pollIntervalSeconds}UL * 1000UL; // how often to read + send
-const unsigned long CONFIG_CHECK_INTERVAL_MS = 60UL * 60UL * 1000UL; // re-check config hourly
+// Poll interval is baked in when the sketch is generated (Admin -> this site
+// -> ESP32 Poll Interval). Changing it in Admin requires regenerating and
+// reflashing this sketch.
+const unsigned long POLL_INTERVAL_MS   = ${pollIntervalSeconds}UL * 1000UL; // how often to read + send
 const int           MAX_FILE_LINES     = 5000;
 const int           MODBUS_MAX_RETRIES = 3;              // per-register retry attempts
 const int           SOCKET_REFRESH_CYCLES = 40;           // ~10 min at 15s interval
@@ -1742,7 +1734,7 @@ const uint32_t      MIN_FREE_HEAP_BYTES = 20000;          // proactively reboot 
 WiFiClient modbusSocket;
 uint16_t modbusTransactionId = 0;
 unsigned long lastPollMs = 0;
-unsigned long lastConfigCheckMs = 0; // 0 forces a check-in on the very first loop
+bool firstPollDone = false; // first reading happens right after boot, not 10 min later
 int pollsSinceSocketOpen = 0;
 unsigned long wifiRetryDelay = WIFI_RETRY_BASE_MS;
 unsigned long lastWifiAttemptMs = 0;
@@ -1908,58 +1900,6 @@ bool postPayload(const String& payload) {
   return false;
 }
 
-// Checks in with the dashboard for current settings (currently just poll
-// interval; more can be added here later without another reflash). Called
-// once at boot and then every CONFIG_CHECK_INTERVAL_MS — a change made in
-// Admin (Poll Interval panel) takes effect here on the next check-in,
-// no reflash needed. Silently keeps the existing value if this fails
-// (offline, server hiccup, etc.) rather than blocking normal operation.
-void checkInForConfig() {
-  WiFiClientSecure client;
-  client.setInsecure();
-
-  // See postPayload() above for why this explicit pre-connect (not just
-  // setTimeout()) is what actually bounds the connection/TLS handshake.
-  esp_task_wdt_reset();
-  bool connected = client.connect(extractHost(CONFIG_URL).c_str(), 443, 8000);
-  esp_task_wdt_reset();
-  if (!connected) {
-    Serial.println("Config check-in: connect failed/timed out, keeping current settings");
-    return;
-  }
-
-  HTTPClient http;
-  if (!http.begin(client, CONFIG_URL)) {
-    Serial.println("Config check-in: http.begin() failed");
-    return;
-  }
-  http.addHeader("x-site-api-key", SITE_API_KEY);
-  http.setTimeout(8000);
-  esp_task_wdt_reset();
-  int code = http.GET();
-  esp_task_wdt_reset();
-
-  if (code == 200) {
-    String body = http.getString();
-    StaticJsonDocument<256> doc;
-    if (!deserializeJson(doc, body)) {
-      long newIntervalSec = doc["poll_interval_seconds"] | 0;
-      if (newIntervalSec >= 5 && newIntervalSec <= 3600) {
-        unsigned long newIntervalMs = (unsigned long)newIntervalSec * 1000UL;
-        if (newIntervalMs != POLL_INTERVAL_MS) {
-          Serial.printf("Config check-in: poll interval updated %lu -> %lu ms\\n", POLL_INTERVAL_MS, newIntervalMs);
-          POLL_INTERVAL_MS = newIntervalMs;
-        }
-      }
-    } else {
-      Serial.println("Config check-in: bad JSON in response");
-    }
-  } else {
-    Serial.printf("Config check-in failed (HTTP %d), keeping current settings\\n", code);
-  }
-  http.end();
-}
-
 void flushQueue() {
   if (!spiffsAvailable) return;
   File f = SPIFFS.open(QUEUE_FILE, FILE_READ);
@@ -2023,7 +1963,7 @@ bool ensureModbusConnected(bool forceReconnect = false) {
   Serial.print("Connecting to HMI Modbus TCP...");
   esp_task_wdt_reset();
   // Explicit timeout (ms) passed directly to connect() — same lesson as
-  // postPayload()/checkInForConfig(): a generic setTimeout() call doesn't
+  // postPayload(): a generic setTimeout() call doesn't
   // reliably bound the connection attempt itself on every ESP32 core
   // version. If the HMI's network ever silently drops packets rather than
   // actively refusing the connection (a dead HMI, a flaky switch/cable),
@@ -2219,19 +2159,6 @@ void setup() {
   }
 
   connectWifi();
-  // checkInForConfig() temporarily disabled — on-site testing showed it can
-  // hang so severely (likely deep inside the TLS handshake library itself)
-  // that it defeats even the hardware watchdog, with NO reboot occurring at
-  // all even after several minutes stuck. This is a more serious class of
-  // bug than a simple missing timeout, and isn't something a timeout
-  // parameter alone reliably fixes. Disabled here so the device can reach
-  // its actual job (reading and sending meter data) reliably, at the cost
-  // of losing the "change poll interval without reflashing" convenience
-  // for now. Poll interval falls back to the value hardcoded below.
-  // if (WiFi.status() == WL_CONNECTED) {
-  //   checkInForConfig();
-  //   lastConfigCheckMs = millis();
-  // }
 }
 
 void loop() {
@@ -2252,13 +2179,8 @@ void loop() {
 
   unsigned long now = millis();
 
-  // checkInForConfig() disabled here too — see setup() above for why.
-  // if (WiFi.status() == WL_CONNECTED && now - lastConfigCheckMs >= CONFIG_CHECK_INTERVAL_MS) {
-  //   lastConfigCheckMs = now;
-  //   checkInForConfig();
-  // }
-
-  if (now - lastPollMs >= POLL_INTERVAL_MS) {
+  if (!firstPollDone || now - lastPollMs >= POLL_INTERVAL_MS) {
+    firstPollDone = true;
     lastPollMs = now;
 
     uint32_t values[NUM_METERS];
