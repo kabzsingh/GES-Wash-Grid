@@ -2009,6 +2009,13 @@ void setup() {
   Serial.begin(115200);
   delay(500);
 
+  // Mount (and on a freshly erased board, format) storage BEFORE starting
+  // the watchdog. Formatting takes ~35s, longer than the 5s watchdog that
+  // newer Arduino-ESP32 versions start automatically, which otherwise
+  // reboots the board mid-format in a loop. Confirmed on-site, Cape Town.
+  if (!SPIFFS.begin(true)) Serial.println("SPIFFS mount failed!");
+  else Serial.printf("SPIFFS OK — %u bytes free\\n", SPIFFS.totalBytes() - SPIFFS.usedBytes());
+
   // Hardware watchdog: reboot automatically if the loop ever stalls.
   esp_task_wdt_config_t wdtConfig = {
     .timeout_ms = WDT_TIMEOUT_S * 1000,
@@ -2017,9 +2024,6 @@ void setup() {
   };
   esp_task_wdt_init(&wdtConfig);
   esp_task_wdt_add(NULL);
-
-  if (!SPIFFS.begin(true)) Serial.println("SPIFFS mount failed!");
-  else Serial.printf("SPIFFS OK — %u bytes free\\n", SPIFFS.totalBytes() - SPIFFS.usedBytes());
 
   connectWifi();
 }
