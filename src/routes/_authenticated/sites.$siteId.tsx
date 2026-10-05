@@ -1,7 +1,7 @@
 import { createFileRoute, useNavigate, Link } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
-import { ArrowLeft, Activity, AlertTriangle, Droplets, FlaskConical, Gauge, Pencil, Radio, TrendingUp, FileText, Monitor, Copy } from "lucide-react";
+import { ArrowLeft, Activity, AlertTriangle, Droplets, FlaskConical, Gauge, Pencil, Radio, TrendingUp, FileText } from "lucide-react";
 import { MeterCard } from "@/components/app/MeterCard";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -50,8 +50,7 @@ interface ChemLowEvent {
 function SiteDetail() {
   const { siteId } = Route.useParams();
   const navigate = useNavigate();
-  const { isAdmin } = useAuth();
-  const [site, setSite] = useState<{ name: string; location: string | null; machine_type: string | null; fresh_water_daily_threshold_liters: number | null; primary_color: string | null; secondary_color: string | null; accent_color: string | null; remote_host: string | null; remote_vnc_port: number | null } | null>(null);
+  const [site, setSite] = useState<{ name: string; location: string | null; machine_type: string | null; fresh_water_daily_threshold_liters: number | null; primary_color: string | null; secondary_color: string | null; accent_color: string | null } | null>(null);
   const [meters, setMeters] = useState<Meter[]>([]);
   const [readings, setReadings] = useState<Reading[]>([]);
   const [totals, setTotals] = useState<Record<string, number>>({});
@@ -85,7 +84,7 @@ function SiteDetail() {
 
   const load = async () => {
     const [{ data: s }, { data: m }, { data: apiKeys }] = await Promise.all([
-      supabase.from("sites").select("name,location,machine_type,fresh_water_daily_threshold_liters,primary_color,secondary_color,accent_color,remote_host,remote_vnc_port").eq("id", siteId).single(),
+      supabase.from("sites").select("name,location,machine_type,fresh_water_daily_threshold_liters,primary_color,secondary_color,accent_color").eq("id", siteId).single(),
       supabase
         .from("site_meters")
         .select("id,meter_type,name,unit,capacity,low_threshold,device_key,position,chemical_group,sensor_type,count_for_avg_water")
@@ -490,39 +489,7 @@ function SiteDetail() {
             {site.machine_type && <p className="text-sm text-muted-foreground/70 mt-0.5">{site.machine_type}</p>}
           </div>
         </div>
-        <div className="flex items-center gap-2 flex-wrap justify-end">
-          {isAdmin && site.remote_host && (() => {
-            // Admin-only. Opens the site's HMI in RealVNC Viewer using its
-            // official link format. The VNC password is deliberately NOT
-            // stored in the app — VNC Viewer asks for it when connecting.
-            const address = `${site.remote_host}${site.remote_vnc_port ? `:${site.remote_vnc_port}` : ""}`;
-            return (
-              <>
-                <Button variant="outline" size="sm" className="gap-2" asChild>
-                  <a href={`com.realvnc.vncviewer.connect://${address}`}>
-                    <Monitor className="h-4 w-4" />
-                    Open HMI screen
-                  </a>
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="gap-1 px-2"
-                  title={`Copy ${address}`}
-                  onClick={async () => {
-                    try {
-                      await navigator.clipboard.writeText(address);
-                      toast.success(`Copied ${address}`);
-                    } catch {
-                      toast.error("Couldn't copy — address is " + address);
-                    }
-                  }}
-                >
-                  <Copy className="h-4 w-4" />
-                </Button>
-              </>
-            );
-          })()}
+        <div className="flex items-center gap-2">
           <Button
             variant="outline"
             size="sm"

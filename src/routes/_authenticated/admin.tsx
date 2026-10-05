@@ -13,7 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { toast } from "sonner";
 import { createSiteApiKey, grantAdminBootstrap, getSmtpSettings, updateSmtpSettings, listAllUsers, setUserRole, deleteUser } from "@/lib/admin.functions";
-import { Copy, Plus, Trash2, KeyRound, Cpu, Mail, Send, Server, ShieldCheck, Loader2, AlertTriangle, Users, UserCheck, UserX, Building2, Save, Pencil, Palette, Share2, Monitor } from "lucide-react";
+import { Copy, Plus, Trash2, KeyRound, Cpu, Mail, Send, Server, ShieldCheck, Loader2, AlertTriangle, Users, UserCheck, UserX, Building2, Save, Pencil, Palette, Share2 } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 
 import { Textarea } from "@/components/ui/textarea";
@@ -36,8 +36,6 @@ interface Site {
   machine_type?: string | null;
   poll_interval_seconds?: number;
   pulse_forward_url?: string | null;
-  remote_host?: string | null;
-  remote_vnc_port?: number | null;
 }
 interface Meter { id: string; site_id: string; meter_type: "wash"|"fresh_water"|"chemical"|"chemical_flow"; name: string; unit: string; capacity: number | null; low_threshold: number | null; device_key: string; position: number; chemical_group: string | null; modbus_address: number | null; sensor_type: "switch" | "probe" | "counter"; count_for_avg_water: boolean }
 interface ApiKeyRow { id: string; site_id: string; key_prefix: string; label: string | null; revoked: boolean; last_used_at: string | null; created_at: string }
@@ -1136,10 +1134,6 @@ function SiteAdminCard({
         </div>
 
         <div className="pt-4 border-t border-border/60">
-          <RemoteAccessSettings site={site} />
-        </div>
-
-        <div className="pt-4 border-t border-border/60">
           <WaterAlertSettings site={site} onSaved={() => { /* parent will refetch on next mount */ }} />
         </div>
 
@@ -1150,69 +1144,6 @@ function SiteAdminCard({
         <div className="pt-4 border-t border-border/60">
           <ReportSettings site={site} onSaved={() => { /* parent will refetch on next mount */ }} />
         </div>
-      </div>
-    </div>
-  );
-}
-
-function RemoteAccessSettings({ site }: { site: Site }) {
-  const [host, setHost] = useState(site.remote_host || "");
-  const [port, setPort] = useState(site.remote_vnc_port ? String(site.remote_vnc_port) : "");
-  const [saving, setSaving] = useState(false);
-
-  const save = async () => {
-    // Accept a pasted full address like "site.dyndns.org:47391" too.
-    let h = host.trim().replace(/^[a-z.]+:\/\//i, "").replace(/\/.*$/, "");
-    let p = port.trim();
-    const m = h.match(/^(.*):(\d+)$/);
-    if (m && !p) { h = m[1]; p = m[2]; }
-    const portNum = p ? Number(p) : null;
-    if (portNum !== null && (!Number.isInteger(portNum) || portNum < 1 || portNum > 65535)) {
-      toast.error("Port must be a number between 1 and 65535");
-      return;
-    }
-    setSaving(true);
-    const { error } = await supabase
-      .from("sites")
-      .update({ remote_host: h || null, remote_vnc_port: portNum } as any)
-      .eq("id", site.id);
-    setSaving(false);
-    if (error) { toast.error(error.message || "Failed to save remote access"); return; }
-    setHost(h); setPort(portNum ? String(portNum) : "");
-    toast.success(h ? "Remote access saved — 'Open HMI screen' now shows on the site page" : "Remote access removed");
-  };
-
-  return (
-    <div>
-      <div className="flex items-center gap-3 mb-3">
-        <div className="h-8 w-8 rounded bg-muted flex items-center justify-center">
-          <Monitor className="h-4 w-4 text-muted-foreground" />
-        </div>
-        <div>
-          <h4 className="text-sm font-bold uppercase tracking-widest text-muted-foreground">Remote Access (HMI)</h4>
-          <p className="text-[10px] text-muted-foreground mt-0.5">
-            The site's DynDNS address and VNC port. Adds an "Open HMI screen" button (admins only) on the
-            site page that opens VNC Viewer. The VNC password is not stored here — VNC Viewer asks for it.
-          </p>
-        </div>
-      </div>
-      <div className="flex flex-col sm:flex-row gap-2 max-w-xl">
-        <Input
-          value={host}
-          onChange={(e) => setHost(e.target.value)}
-          placeholder="e.g. centurion.dyndns.org"
-          className="h-9 text-xs font-mono flex-1"
-        />
-        <Input
-          value={port}
-          onChange={(e) => setPort(e.target.value.replace(/[^0-9]/g, ""))}
-          placeholder="Port e.g. 5900"
-          inputMode="numeric"
-          className="h-9 text-xs font-mono sm:w-32"
-        />
-        <Button size="sm" onClick={save} disabled={saving} className="h-9 text-xs font-bold shrink-0">
-          {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Save"}
-        </Button>
       </div>
     </div>
   );
