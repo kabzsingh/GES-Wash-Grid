@@ -499,10 +499,7 @@ function SiteDetail() {
             return (
               <>
                 <Button variant="outline" size="sm" className="gap-2" asChild>
-                  {/* RealVNC Viewer on Android only responds to plain vnc:// links
-                      (confirmed on Kas's phone: the official format did nothing).
-                      Other platforms use RealVNC's official link format. */}
-                  <a href={`${typeof navigator !== "undefined" && /android/i.test(navigator.userAgent) ? "vnc" : "com.realvnc.vncviewer.connect"}://${address}`}>
+                  <a href={`com.realvnc.vncviewer.connect://${address}`}>
                     <Monitor className="h-4 w-4" />
                     Open HMI screen
                   </a>
