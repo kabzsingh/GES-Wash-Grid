@@ -1649,35 +1649,39 @@ function buildEsp32Sketch(site: Site, meters: Meter[]) {
     : "";
 
   const sketch = `// Auto-generated for site: ${site.name}
-// Field-proven version — this is the exact sketch confirmed working on-site
-// at Europcar Jetpark (02 Oct 2026). Keep networking changes minimal, and
-// test any change on real hardware before rolling it out.
+// Time-stamped version — confirmed on-site at Bulldog Bedfordview
+// (13-21 Oct 2026). Keep networking changes minimal, and test any change on
+// real hardware before rolling it out.
 //
 // Reads ${configured.length} meter values from the Delta HMI/PLC over Modbus TCP
 // (the HMI acts as a Modbus TCP Server on port 502, exposing PLC
 // D-registers via the Modbus TCP Mapping Table configured in DOPSoft),
 // then POSTs them over HTTPS to the wash dashboard ingest API.
 //
+// Each reading is saved with the real time it was taken (from the internet,
+// NTP). After a network outage, saved readings are sent oldest-first, up to
+// 20 a minute, and the dashboard stores each one at the time it was TAKEN,
+// so daily figures and reports stay correct. Readings whose time can't be
+// known (lost power AND internet, then lost power again before internet
+// returned) are skipped; running totals stay correct from later readings.
+// A power bank on the ESP32 prevents that case.
+//
 // === MODBUS MAPPING (from DOPSoft Modbus TCP Mapping Table) ===
 ${mappingComment}
 ${missingComment}//
-// IMPORTANT: word order (high/low) for 32-bit values is uncertain.
-// This tries LOW-word-first (register N = low 16 bits, N+1 = high 16
-// bits), Delta's typical default. If a reading looks wildly wrong vs
-// the HMI screen, swap combineWords() to: ((uint32_t)lo << 16) | hi;
-//
 // NOTE ON MODBUS ADDRESSING: mapping table addresses are 1-based
 // (e.g. 3025). The wire protocol is 0-based, so 3025 in the table
 // means we request address 3024. This -1 offset is already applied.
 //
-// Poll interval is set in Admin (this site > ESP32 Poll Interval) and baked
-// in when this sketch is generated. Changing it requires a reflash.
-//
 // ============================================================
-// TODO BEFORE FLASHING — fill in the values below from the dashboard:
-//   1. WIFI_SSID / WIFI_PASS   -> WiFi credentials for this site
-//   2. SITE_API_KEY            -> "ws_live_..." key for ${site.name}
-//   3. HMI_IP                  -> IP address of the HMI/PLC on this site's LAN
+// BEFORE FLASHING:
+//   1. Fill in WIFI_SSID / WIFI_PASS / HMI_IP for ${site.name}
+//   2. Fill in SITE_API_KEY: generate it in Admin > ${site.name} > API Keys
+//      and copy it straight away (it's only shown once)
+//   3. Tools > Erase All Flash Before Sketch Upload: ENABLED for a new board,
+//      or one moved from another site. After upload it shows
+//      "mount failed, -10025" and sits quietly ~30-40s while formatting.
+//      That's normal.
 // ============================================================
 
 #include <WiFi.h>
@@ -1686,24 +1690,34 @@ ${missingComment}//
 #include <SPIFFS.h>
 #include <ArduinoJson.h>
 #include <esp_task_wdt.h>
+#include <time.h>          // NEW: real time from NTP
+#include <esp_random.h>    // NEW: esp_random() for the boot id
 
-const char* WIFI_SSID    = "";                 // TODO: site WiFi SSID
-const char* WIFI_PASS    = "";                 // TODO: site WiFi password
-const char* SITE_API_KEY = "";                 // TODO: dashboard API key for this site
+const char* WIFI_SSID    = "";                   // TODO: site WiFi name
+const char* WIFI_PASS    = "";                   // TODO: site WiFi password
+const char* SITE_API_KEY = "";                   // TODO: this site's API key from Admin
 const char* INGEST_URL   = "${endpoint}";
 const char* QUEUE_FILE   = "/queue.jsonl";
 
 // HMI acting as Modbus TCP Server
-const char* HMI_IP = "";   // TODO: e.g. "192.168.8.10"
+const char* HMI_IP = "";   // TODO: site HMI IP, e.g. "192.168.8.10"
 const int   MODBUS_PORT = 502;
 
-const unsigned long POLL_INTERVAL_MS   = ${pollIntervalSeconds}UL * 1000UL; // how often to read + send
-const int           MAX_FILE_LINES     = 5000;
+const unsigned long POLL_INTERVAL_MS   = ${pollIntervalSeconds}UL * 1000UL; // read + send interval (set in Admin)
+const int           MAX_FILE_LINES     = 2500;             // ~17 days at 10 min. Must stay under half the
+                                                        // storage (clean-up writes a temporary copy):
+                                                        // 2500 fits even 11-meter sites.
 const int           MODBUS_MAX_RETRIES = 3;              // per-register retry attempts
 const int           SOCKET_REFRESH_CYCLES = 40;           // refresh Modbus socket every 40 polls
 const unsigned long WDT_TIMEOUT_S      = 30;              // reboot if loop stalls this long
 const unsigned long WIFI_RETRY_BASE_MS = 2000;            // backoff base for WiFi reconnect
 const unsigned long WIFI_RETRY_MAX_MS  = 60000;           // cap backoff at 60s
+
+// NEW: time-stamping and backlog settings
+const time_t        VALID_TIME_AFTER   = 1700000000;      // any real date after Nov 2023
+const int           MAX_SENDS_PER_FLUSH = 20;             // backlog: at most 20 sends per go
+const unsigned long BACKLOG_RETRY_MS   = 60UL * 1000UL;   // keep sending backlog every minute
+const unsigned long NO_TIME_FALLBACK_MS = 30UL * 60UL * 1000UL; // if NTP never works, send untimed after 30 min
 
 WiFiClient modbusSocket;
 uint16_t modbusTransactionId = 0;
@@ -1711,6 +1725,12 @@ unsigned long lastPollMs = 0;
 int pollsSinceSocketOpen = 0;
 unsigned long wifiRetryDelay = WIFI_RETRY_BASE_MS;
 unsigned long lastWifiAttemptMs = 0;
+
+// NEW
+uint32_t bootId = 0;                // random number per start-up, to tell boots apart
+bool backlogPending = false;        // saved readings still waiting to be sent
+unsigned long lastFlushMs = 0;
+bool timeAnnounced = false;
 
 // ===== Modbus register map =====
 // modbusAddr is already 0-based (mapping table address minus 1).
@@ -1727,16 +1747,38 @@ const int NUM_METERS = sizeof(meters) / sizeof(meters[0]);
 
 // Combine two 16-bit registers into a 32-bit value.
 // Delta typically stores DWORD as LOW word first, HIGH word second.
-// If values look wrong once tested, swap to: ((uint32_t)lo << 16) | hi;
 uint32_t combineWords(uint16_t lo, uint16_t hi) {
   return ((uint32_t)hi << 16) | lo;
 }
 
+// ===== NEW: time helpers =====
+bool timeIsValid() {
+  return time(nullptr) > VALID_TIME_AFTER;
+}
+
+void announceTimeOnce() {
+  if (timeAnnounced || !timeIsValid()) return;
+  timeAnnounced = true;
+  time_t now = time(nullptr);
+  struct tm t;
+  gmtime_r(&now, &t);
+  Serial.printf("Time synced: %04d-%02d-%02d %02d:%02d:%02d UTC\\n",
+                t.tm_year + 1900, t.tm_mon + 1, t.tm_mday, t.tm_hour, t.tm_min, t.tm_sec);
+}
+
 // ===== SPIFFS helpers (offline-buffering pattern) =====
+// NEW: each saved line also records WHEN the reading was taken:
+//   "t": real time (seconds)        — when the clock is known
+//   "b"/"m": boot id + millis()     — when it isn't known yet
 void appendToQueue(uint32_t values[], bool ok[], int count) {
   File f = SPIFFS.open(QUEUE_FILE, FILE_APPEND);
   if (!f) { Serial.println("Failed to open queue"); return; }
   f.print("{");
+  if (timeIsValid()) {
+    f.printf("\\"t\\":%lu,", (unsigned long)time(nullptr));
+  } else {
+    f.printf("\\"b\\":%lu,\\"m\\":%lu,", (unsigned long)bootId, (unsigned long)millis());
+  }
   for (int i = 0; i < count; i++) {
     f.printf("\\"v%d\\":%u,\\"ok%d\\":%d", i, values[i], i, ok[i] ? 1 : 0);
     if (i < count - 1) f.print(",");
@@ -1757,7 +1799,14 @@ int countQueueLines() {
 void removeFirstLines(int n) {
   File src = SPIFFS.open(QUEUE_FILE, FILE_READ);
   File tmp = SPIFFS.open("/tmp.jsonl", FILE_WRITE);
-  if (!src || !tmp) return;
+  if (!src || !tmp) {
+    // NEW: say so, instead of failing silently (this is what left
+    // Engen Rembrandt re-sending its whole list every cycle).
+    Serial.println("Queue cleanup FAILED: could not open files");
+    if (src) src.close();
+    if (tmp) tmp.close();
+    return;
+  }
   int skipped = 0;
   while (src.available()) {
     String line = src.readStringUntil('\\n');
@@ -1766,7 +1815,9 @@ void removeFirstLines(int n) {
   }
   src.close(); tmp.close();
   SPIFFS.remove(QUEUE_FILE);
-  SPIFFS.rename("/tmp.jsonl", QUEUE_FILE);
+  if (!SPIFFS.rename("/tmp.jsonl", QUEUE_FILE)) {
+    Serial.println("Queue cleanup FAILED: rename");
+  }
 }
 
 // ===== WiFi with backoff =====
@@ -1820,18 +1871,53 @@ bool postPayload(const String& payload) {
   return false;
 }
 
+// NEW: sends saved lines oldest-first, each with the time it was taken.
+// Stops after MAX_SENDS_PER_FLUSH so a big backlog goes out gradually.
 void flushQueue() {
+  lastFlushMs = millis();
   File f = SPIFFS.open(QUEUE_FILE, FILE_READ);
-  if (!f || f.size() == 0) { if (f) f.close(); return; }
+  if (!f || f.size() == 0) { if (f) f.close(); backlogPending = false; return; }
+
   int sent = 0;
+  int processed = 0;     // lines handled from the top (sent or discarded)
+  bool stoppedEarly = false;
+
   while (f.available()) {
     String line = f.readStringUntil('\\n');
     line.trim();
-    if (line.length() == 0) continue;
-    StaticJsonDocument<512> doc;
-    if (deserializeJson(doc, line)) continue;
+    if (line.length() == 0) { processed++; continue; }
+    StaticJsonDocument<768> doc;
+    if (deserializeJson(doc, line)) { processed++; continue; }   // corrupt line
 
-    String payload = "{\\"readings\\":[";
+    // --- Work out when this reading was taken ---
+    unsigned long ts = 0;           // 0 = send without a time
+    if (doc.containsKey("t")) {
+      ts = doc["t"].as<unsigned long>();
+    } else {
+      uint32_t lineBoot = doc["b"].as<uint32_t>();
+      unsigned long lineMs = doc["m"].as<unsigned long>();
+      if (lineBoot != bootId) {
+        // Taken before the last restart, when the time wasn't known.
+        // Its real time can't be worked out, so skip it rather than
+        // send it with a wrong time. Totals stay right from later readings.
+        Serial.println("Skipping a reading with unknown time (from before restart)");
+        processed++;
+        continue;
+      }
+      if (timeIsValid()) {
+        unsigned long ageSec = (millis() - lineMs) / 1000UL;
+        ts = (unsigned long)time(nullptr) - ageSec;
+      } else if (millis() < NO_TIME_FALLBACK_MS) {
+        // Time not known yet: keep it and try again once NTP has synced.
+        stoppedEarly = true;
+        break;
+      }
+      // else: NTP has never worked for 30 min — send without a time (ts = 0)
+    }
+
+    String payload = "{";
+    if (ts > 0) payload += "\\"ts\\":" + String(ts) + ",";
+    payload += "\\"readings\\":[";
     bool first = true;
     for (int i = 0; i < NUM_METERS; i++) {
       char okKey[8];
@@ -1849,23 +1935,30 @@ void flushQueue() {
     }
     payload += "]}";
 
-    if (first) continue; // every reading in this queued line failed
+    if (first) { processed++; continue; } // every reading in this saved line failed
 
     if (WiFi.status() != WL_CONNECTED) connectWifi();
-    if (WiFi.status() != WL_CONNECTED) break;
+    if (WiFi.status() != WL_CONNECTED) { stoppedEarly = true; break; }
 
     if (postPayload(payload)) {
       sent++;
+      processed++;
     } else {
-      break; // stop on first failure, retry whole remaining queue next cycle
+      stoppedEarly = true;
+      break; // stop on first failure, retry from here next time
     }
     esp_task_wdt_reset();
+
+    if (sent >= MAX_SENDS_PER_FLUSH) { stoppedEarly = true; break; }
   }
   f.close();
-  if (sent > 0) {
-    Serial.printf("Flushed %d records\\n", sent);
-    removeFirstLines(sent);
+
+  if (processed > 0) {
+    if (sent > 0) Serial.printf("Flushed %d records\\n", sent);
+    removeFirstLines(processed);
   }
+  backlogPending = stoppedEarly;
+  if (backlogPending) Serial.println("More saved readings to send, continuing shortly");
 }
 
 bool ensureModbusConnected(bool forceReconnect = false) {
@@ -2009,10 +2102,11 @@ void setup() {
   Serial.begin(115200);
   delay(500);
 
+  bootId = esp_random() & 0x7FFFFFFF; // NEW: kept positive so it reads back exactly
+
   // Mount (and on a freshly erased board, format) storage BEFORE starting
   // the watchdog. Formatting takes ~35s, longer than the 5s watchdog that
-  // newer Arduino-ESP32 versions start automatically, which otherwise
-  // reboots the board mid-format in a loop. Confirmed on-site, Cape Town.
+  // newer Arduino-ESP32 versions start automatically.
   if (!SPIFFS.begin(true)) Serial.println("SPIFFS mount failed!");
   else Serial.printf("SPIFFS OK — %u bytes free\\n", SPIFFS.totalBytes() - SPIFFS.usedBytes());
 
@@ -2026,12 +2120,20 @@ void setup() {
   esp_task_wdt_add(NULL);
 
   connectWifi();
+
+  // NEW: start getting the real time (UTC). Runs in the background and
+  // keeps re-syncing by itself; doesn't block start-up.
+  configTime(0, 0, "pool.ntp.org", "time.google.com");
+
+  // NEW: if there are saved readings from before, send them soon.
+  backlogPending = countQueueLines() > 0;
 }
 
 void loop() {
   esp_task_wdt_reset();
 
   if (WiFi.status() != WL_CONNECTED) connectWifi();
+  announceTimeOnce(); // NEW: prints once when the time is known
 
   unsigned long now = millis();
   if (now - lastPollMs >= POLL_INTERVAL_MS) {
@@ -2042,6 +2144,9 @@ void loop() {
     readAllMeters(values, ok); // fills what it can; failed reads are marked not-ok
     if (countQueueLines() >= MAX_FILE_LINES) removeFirstLines(100);
     appendToQueue(values, ok, NUM_METERS);
+    flushQueue();
+  } else if (backlogPending && WiFi.status() == WL_CONNECTED && now - lastFlushMs >= BACKLOG_RETRY_MS) {
+    // NEW: between readings, keep working through any backlog every minute
     flushQueue();
   }
 
