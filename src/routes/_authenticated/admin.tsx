@@ -1649,9 +1649,10 @@ function buildEsp32Sketch(site: Site, meters: Meter[]) {
     : "";
 
   const sketch = `// Auto-generated for site: ${site.name}
-// Time-stamped version — confirmed on-site at Bulldog Bedfordview
-// (13-21 Oct 2026). Keep networking changes minimal, and test any change on
-// real hardware before rolling it out.
+// Time-stamped + self-reset version. Time-stamping confirmed on-site at
+// Bulldog Bedfordview (13-21 Oct 2026); self-reset added 24 Oct 2026.
+// Keep networking changes minimal, and test any change on real hardware
+// before rolling it out.
 //
 // Reads ${configured.length} meter values from the Delta HMI/PLC over Modbus TCP
 // (the HMI acts as a Modbus TCP Server on port 502, exposing PLC
@@ -1661,10 +1662,18 @@ function buildEsp32Sketch(site: Site, meters: Meter[]) {
 // Each reading is saved with the real time it was taken (from the internet,
 // NTP). After a network outage, saved readings are sent oldest-first, up to
 // 20 a minute, and the dashboard stores each one at the time it was TAKEN,
-// so daily figures and reports stay correct. Readings whose time can't be
-// known (lost power AND internet, then lost power again before internet
-// returned) are skipped; running totals stay correct from later readings.
-// A power bank on the ESP32 prevents that case.
+// so daily figures and reports stay correct.
+//
+// SELF-RESET (search "SELF-RESET" to find each part):
+//   A background check (separate from the main program, so it still runs
+//   if the main program freezes) restarts the board when:
+//     - the main program hasn't checked in for 5 minutes (frozen)
+//     - WiFi has been down for 30 minutes (WiFi stuck)
+//     - WiFi is up but nothing has reached the dashboard for 2 hours
+//   Before a self-restart, and every loop, the current time is kept in
+//   memory that survives a restart, so after a self-restart (or a watchdog
+//   crash) the board carries on with the right time even with no internet.
+//   After a real power cut it gets the time from the internet as before.
 //
 // === MODBUS MAPPING (from DOPSoft Modbus TCP Mapping Table) ===
 ${mappingComment}
@@ -1679,9 +1688,9 @@ ${missingComment}//
 //   2. Fill in SITE_API_KEY: generate it in Admin > ${site.name} > API Keys
 //      and copy it straight away (it's only shown once)
 //   3. Tools > Erase All Flash Before Sketch Upload: ENABLED for a new board,
-//      or one moved from another site. After upload it shows
-//      "mount failed, -10025" and sits quietly ~30-40s while formatting.
-//      That's normal.
+//      or one moved from another site / running an older sketch. After
+//      upload it shows "mount failed, -10025" and sits quietly ~30-40s
+//      while formatting. That's normal.
 // ============================================================
 
 #include <WiFi.h>
@@ -1692,6 +1701,8 @@ ${missingComment}//
 #include <esp_task_wdt.h>
 #include <time.h>          // NEW: real time from NTP
 #include <esp_random.h>    // NEW: esp_random() for the boot id
+#include <esp_system.h>    // SELF-RESET: esp_restart(), esp_reset_reason()
+#include <sys/time.h>      // SELF-RESET: settimeofday()
 
 const char* WIFI_SSID    = "";                   // TODO: site WiFi name
 const char* WIFI_PASS    = "";                   // TODO: site WiFi password
@@ -1732,6 +1743,22 @@ bool backlogPending = false;        // saved readings still waiting to be sent
 unsigned long lastFlushMs = 0;
 bool timeAnnounced = false;
 
+// ===== SELF-RESET settings and state =====
+const unsigned long SELF_RESET_FROZEN_MS  = 5UL * 60UL * 1000UL;        // main program silent 5 min
+const unsigned long SELF_RESET_NO_WIFI_MS = 30UL * 60UL * 1000UL;       // WiFi down 30 min
+const unsigned long SELF_RESET_NO_SEND_MS = 2UL * 60UL * 60UL * 1000UL; // nothing delivered for 2 h
+const uint32_t      RTC_MAGIC = 0x47455331;                            // marks the saved time as valid
+
+volatile unsigned long heartbeatMs = 0;   // main program "I'm alive" time
+volatile unsigned long lastSendOkMs = 0;  // last time the dashboard accepted a send
+volatile unsigned long wifiDownSinceMs = 0;
+
+// Kept in RTC memory: survives a software restart / watchdog crash,
+// NOT a power cut.
+RTC_NOINIT_ATTR uint32_t rtcMagic;
+RTC_NOINIT_ATTR uint32_t rtcSavedEpoch;
+RTC_NOINIT_ATTR uint32_t rtcResetCode;     // why we restarted ourselves (1..3)
+
 // ===== Modbus register map =====
 // modbusAddr is already 0-based (mapping table address minus 1).
 struct MeterReg {
@@ -1749,6 +1776,14 @@ const int NUM_METERS = sizeof(meters) / sizeof(meters[0]);
 // Delta typically stores DWORD as LOW word first, HIGH word second.
 uint32_t combineWords(uint16_t lo, uint16_t hi) {
   return ((uint32_t)hi << 16) | lo;
+}
+
+// SELF-RESET: tell both watchdogs we're alive, and keep the saved time fresh.
+void feed() {
+  esp_task_wdt_reset();
+  heartbeatMs = millis();
+  time_t now = time(nullptr);
+  if (now > 1700000000) { rtcSavedEpoch = (uint32_t)now; rtcMagic = RTC_MAGIC; }
 }
 
 // ===== NEW: time helpers =====
@@ -1838,7 +1873,7 @@ void connectWifi() {
   while (WiFi.status() != WL_CONNECTED && millis() - t0 < 10000) {
     delay(250);
     Serial.print(".");
-    esp_task_wdt_reset(); // don't let a slow connect trip the watchdog
+    feed(); // don't let a slow connect trip the watchdog
   }
 
   if (WiFi.status() == WL_CONNECTED) {
@@ -1866,7 +1901,7 @@ bool postPayload(const String& payload) {
   int code = http.POST(payload);
   http.end();
 
-  if (code == 200) return true;
+  if (code == 200) { lastSendOkMs = millis(); return true; } // SELF-RESET: delivered
   Serial.printf("Send failed (HTTP %d)\\n", code);
   return false;
 }
@@ -1947,7 +1982,7 @@ void flushQueue() {
       stoppedEarly = true;
       break; // stop on first failure, retry from here next time
     }
-    esp_task_wdt_reset();
+    feed();
 
     if (sent >= MAX_SENDS_PER_FLUSH) { stoppedEarly = true; break; }
   }
@@ -2056,7 +2091,7 @@ bool modbusReadHoldingRegisters(uint16_t startAddr, uint16_t numRegs, uint16_t o
     Serial.printf("  retry %d/%d for addr %u\\n", attempt, MODBUS_MAX_RETRIES, startAddr);
     ensureModbusConnected(true); // force reconnect before next attempt
     delay(150);
-    esp_task_wdt_reset();
+    feed();
   }
   return false;
 }
@@ -2079,7 +2114,7 @@ bool readAllMeters(uint32_t outValues[], bool outOk[]) {
       outValues[i] = 0;
       outOk[i] = false;
       delay(100);
-      esp_task_wdt_reset();
+      feed();
       continue;
     }
 
@@ -2093,9 +2128,64 @@ bool readAllMeters(uint32_t outValues[], bool outOk[]) {
                   meters[i].label, meters[i].modbusAddr + 1, lo, hi, outValues[i]);
 
     delay(100); // brief pause between requests, avoids overlapping/stale responses
-    esp_task_wdt_reset();
+    feed();
   }
   return anyOk; // true if AT LEAST ONE meter was read successfully this cycle
+}
+
+// ===== SELF-RESET =====
+void selfRestart(uint32_t code, const char* why) {
+  Serial.printf("SELF-RESET: %s. Restarting...\\n", why);
+  time_t now = time(nullptr);
+  if (now > 1700000000) { rtcSavedEpoch = (uint32_t)now; rtcMagic = RTC_MAGIC; }
+  rtcResetCode = code;
+  delay(200);
+  esp_restart();
+}
+
+// Runs on its own, every 10 seconds, so it still works if loop() is stuck.
+void selfResetTask(void*) {
+  for (;;) {
+    vTaskDelay(pdMS_TO_TICKS(10000));
+    unsigned long now = millis();
+
+    if (now - heartbeatMs > SELF_RESET_FROZEN_MS)
+      selfRestart(1, "main program frozen for 5 minutes");
+
+    if (WiFi.status() != WL_CONNECTED) {
+      if (wifiDownSinceMs == 0) wifiDownSinceMs = now;
+      else if (now - wifiDownSinceMs > SELF_RESET_NO_WIFI_MS)
+        selfRestart(2, "no WiFi for 30 minutes");
+    } else {
+      wifiDownSinceMs = 0;
+      // Only when the time is known: a restart then keeps the time, so no
+      // saved readings are lost. (If the time isn't known, the internet has
+      // been down since a power cut and a restart wouldn't fix that.)
+      if (timeIsValid() && now - lastSendOkMs > SELF_RESET_NO_SEND_MS)
+        selfRestart(3, "WiFi up but nothing delivered for 2 hours");
+    }
+  }
+}
+
+// After a self-restart or watchdog crash (not a power cut), put the clock
+// back to the time saved just before, so readings keep their real times.
+void restoreTimeAfterRestart() {
+  esp_reset_reason_t why = esp_reset_reason();
+  bool softRestart = (why == ESP_RST_SW || why == ESP_RST_PANIC || why == ESP_RST_INT_WDT ||
+                      why == ESP_RST_TASK_WDT || why == ESP_RST_WDT);
+  if (softRestart && rtcMagic == RTC_MAGIC && rtcResetCode >= 1 && rtcResetCode <= 3) {
+    const char* reasons[] = { "", "main program frozen", "no WiFi", "nothing delivered for 2 hours" };
+    Serial.printf("Restarted by SELF-RESET (%s)\\n", reasons[rtcResetCode]);
+  } else if (softRestart) {
+    Serial.printf("Restarted after a crash/watchdog (reason %d)\\n", (int)why);
+  }
+  rtcResetCode = 0;
+  if (softRestart && rtcMagic == RTC_MAGIC && !timeIsValid()) {
+    struct timeval tv = { .tv_sec = (time_t)rtcSavedEpoch + 5, .tv_usec = 0 };
+    settimeofday(&tv, NULL);
+    Serial.println("Time restored after restart (will be corrected by internet time)");
+  }
+  if (!softRestart) rtcMagic = 0; // power cut: saved time is no longer trustworthy
 }
 
 void setup() {
@@ -2103,6 +2193,7 @@ void setup() {
   delay(500);
 
   bootId = esp_random() & 0x7FFFFFFF; // NEW: kept positive so it reads back exactly
+  restoreTimeAfterRestart();          // SELF-RESET
 
   // Mount (and on a freshly erased board, format) storage BEFORE starting
   // the watchdog. Formatting takes ~35s, longer than the 5s watchdog that
@@ -2127,10 +2218,15 @@ void setup() {
 
   // NEW: if there are saved readings from before, send them soon.
   backlogPending = countQueueLines() > 0;
+
+  // SELF-RESET: start the background check last, once everything is set up.
+  heartbeatMs = millis();
+  lastSendOkMs = millis();
+  xTaskCreatePinnedToCore(selfResetTask, "selfReset", 4096, NULL, 1, NULL, 0);
 }
 
 void loop() {
-  esp_task_wdt_reset();
+  feed();
 
   if (WiFi.status() != WL_CONNECTED) connectWifi();
   announceTimeOnce(); // NEW: prints once when the time is known
