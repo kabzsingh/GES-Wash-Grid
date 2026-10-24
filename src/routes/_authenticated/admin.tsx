@@ -1745,7 +1745,7 @@ bool timeAnnounced = false;
 
 // ===== SELF-RESET settings and state =====
 const unsigned long SELF_RESET_FROZEN_MS  = 5UL * 60UL * 1000UL;        // main program silent 5 min
-const unsigned long SELF_RESET_NO_WIFI_MS = 30UL * 60UL * 1000UL;       // WiFi down 30 min
+const unsigned long SELF_RESET_NO_WIFI_MS = 30UL * 60UL * 1000UL;       // WiFi down 30 min (use 2UL to test on site)
 const unsigned long SELF_RESET_NO_SEND_MS = 2UL * 60UL * 60UL * 1000UL; // nothing delivered for 2 h
 const uint32_t      RTC_MAGIC = 0x47455331;                            // marks the saved time as valid
 
@@ -2148,14 +2148,23 @@ void selfResetTask(void*) {
   for (;;) {
     vTaskDelay(pdMS_TO_TICKS(10000));
     unsigned long now = millis();
+    // Shows what the background check sees, every 10 seconds (Serial only)
+    Serial.printf("[self-reset check] WiFi=%d, down for %lus, last delivered %lus ago, loop alive %lus ago\\n",
+                  (int)WiFi.status(),
+                  wifiDownSinceMs ? (now - wifiDownSinceMs) / 1000 : 0UL,
+                  (now - lastSendOkMs) / 1000,
+                  (now - heartbeatMs) / 1000);
 
     if (now - heartbeatMs > SELF_RESET_FROZEN_MS)
       selfRestart(1, "main program frozen for 5 minutes");
 
     if (WiFi.status() != WL_CONNECTED) {
       if (wifiDownSinceMs == 0) wifiDownSinceMs = now;
-      else if (now - wifiDownSinceMs > SELF_RESET_NO_WIFI_MS)
-        selfRestart(2, "no WiFi for 30 minutes");
+      else if (now - wifiDownSinceMs > SELF_RESET_NO_WIFI_MS) {
+        char why[48];
+        snprintf(why, sizeof(why), "no WiFi for %lu minutes", SELF_RESET_NO_WIFI_MS / 60000UL);
+        selfRestart(2, why);
+      }
     } else {
       wifiDownSinceMs = 0;
       // Only when the time is known: a restart then keeps the time, so no
@@ -2222,7 +2231,8 @@ void setup() {
   // SELF-RESET: start the background check last, once everything is set up.
   heartbeatMs = millis();
   lastSendOkMs = millis();
-  xTaskCreatePinnedToCore(selfResetTask, "selfReset", 4096, NULL, 1, NULL, 0);
+  BaseType_t started = xTaskCreatePinnedToCore(selfResetTask, "selfReset", 8192, NULL, 1, NULL, 0);
+  Serial.println(started == pdPASS ? "Self-reset check started" : "Self-reset check FAILED to start");
 }
 
 void loop() {
