@@ -77,6 +77,30 @@ function SiteDetail() {
   const metersRef = useRef<Meter[]>([]);
   useEffect(() => { metersRef.current = meters; }, [meters]);
 
+  // Chemical used per car for tank-level (probe) chemicals, last 7 days.
+  // Same database calculation as the dashboard card (chemical_usage_per_car):
+  // level drop between refills, divided by washes over the same period.
+  const [chemPerCar, setChemPerCar] = useState<Record<string, { ml: number | null; litres: number; washes: number }>>({});
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      const { data } = await supabase.rpc("chemical_usage_per_car" as any, {
+        p_site_id: siteId,
+        p_from: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString(),
+        p_to: new Date().toISOString(),
+      });
+      if (cancelled || !data) return;
+      const map: Record<string, { ml: number | null; litres: number; washes: number }> = {};
+      for (const u of data as any[]) {
+        map[u.meter_id] = { ml: u.ml_per_car === null ? null : Number(u.ml_per_car), litres: Number(u.litres_used), washes: Number(u.washes) };
+      }
+      setChemPerCar(map);
+    };
+    load();
+    const id = setInterval(load, 5 * 60 * 1000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [siteId]);
+
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(t);
@@ -889,6 +913,19 @@ function SiteDetail() {
                             />
                           </div>
                         )}
+                        {chemPerCar[lvl.id] && (
+                          <div className="mt-3 pt-3 border-t border-border/60">
+                            <div className="flex items-center justify-between text-sm">
+                              <span className="font-medium text-foreground">Chemical per car</span>
+                              <span className="font-semibold tabular-nums text-foreground">
+                                {chemPerCar[lvl.id].ml === null ? "—" : `${chemPerCar[lvl.id].ml} ml`}
+                              </span>
+                            </div>
+                            <div className="mt-0.5 text-[11px] text-muted-foreground">
+                              {chemPerCar[lvl.id].litres} {lvl.unit || "L"} used over {chemPerCar[lvl.id].washes.toLocaleString()} washes, last 7 days
+                            </div>
+                          </div>
+                        )}
                       </div>
                     ) : isLow ? (
                       <div className="rounded-lg border border-destructive/40 bg-destructive/10 p-3">
@@ -928,7 +965,7 @@ function SiteDetail() {
                       </div>
                     </div>
                   )}
-                  {lvl && litresPerWash === null && lvl.low_threshold == null && (
+                  {lvl && !isProbe && litresPerWash === null && lvl.low_threshold == null && (
                     <div className="rounded-lg border border-dashed border-border p-3 text-[11px] text-muted-foreground">
                       Set the low-mark drop volume (e.g. 50L) in Admin to calculate chemical used per wash.
                     </div>
