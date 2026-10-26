@@ -2,7 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/lib/auth-context";
-import { Activity, AlertTriangle, Droplets, Gauge, Radio, TrendingUp, MapPin, Loader2 } from "lucide-react";
+import { Activity, AlertTriangle, Droplets, Gauge, Radio, TrendingUp, MapPin, Loader2, FlaskConical } from "lucide-react";
 import { Link } from "@tanstack/react-router";
 import { ThemeToggle } from "@/components/app/ThemeToggle";
 
@@ -29,6 +29,8 @@ interface SiteMetric {
   is_new_today: boolean;
   fresh_water_alert: boolean;
   avg_water_per_car: number | null;
+  // Level-probe chemicals only: ml used per car over the last 7 days
+  chem_per_car: { name: string; ml_per_car: number | null; litres_used: number; washes: number }[];
 }
 
 function DashboardPage() {
@@ -118,6 +120,26 @@ function DashboardPage() {
           .from("site_meters")
           .select("id, meter_type, sensor_type, low_threshold, count_for_avg_water")
           .eq("site_id", site.id);
+
+        // Chemical used per car (level probes only), last 7 days. Usage is
+        // the level drop between refills, so probe wobble and refills don't
+        // distort it (see chemical_usage_per_car in the database).
+        let chemPerCar: SiteMetric["chem_per_car"] = [];
+        if ((meters || []).some((m: any) => m.meter_type === "chemical" && m.sensor_type === "probe")) {
+          const { data: usage } = await supabase.rpc("chemical_usage_per_car" as any, {
+            p_site_id: site.id,
+            p_from: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString(),
+            p_to: new Date().toISOString(),
+          });
+          chemPerCar = ((usage as any[]) || [])
+            .map((u) => ({
+              name: u.name as string,
+              ml_per_car: u.ml_per_car === null ? null : Number(u.ml_per_car),
+              litres_used: Number(u.litres_used),
+              washes: Number(u.washes),
+            }))
+            .sort((a, b) => a.name.localeCompare(b.name));
+        }
 
         // Active low events (topped_up_at IS NULL) are the persisted, debounced
         // source of truth for switch/counter chemicals — NOT the latest raw
@@ -212,6 +234,7 @@ function DashboardPage() {
             site.fresh_water_daily_threshold_liters != null &&
             freshToday > Number(site.fresh_water_daily_threshold_liters),
           avg_water_per_car: washToday > 0 ? avgWaterToday / washToday : null,
+          chem_per_car: chemPerCar,
         };
       });
 
@@ -424,6 +447,28 @@ function SiteCard({ site }: { site: SiteMetric }) {
               {site.avg_water_per_car !== null ? "L per wash today" : "set meter(s) in Admin"}
             </div>
           </div>
+
+          {/* Chemical / Car (level probes only) */}
+          {site.chem_per_car.length > 0 && (
+            <div className="bg-muted rounded-lg p-4 border border-border mb-6">
+              <div className="flex items-center gap-2 mb-3">
+                <FlaskConical className="h-4 w-4 text-cyan-400" />
+                <span className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">Chemical / Car</span>
+                <span className="text-[10px] text-muted-foreground ml-auto">last 7 days</span>
+              </div>
+              <div className="space-y-1.5">
+                {site.chem_per_car.map((c) => (
+                  <div key={c.name} className="flex items-baseline justify-between gap-2">
+                    <span className="text-sm text-muted-foreground truncate">{c.name}</span>
+                    <span className="text-sm font-semibold text-foreground tabular-nums whitespace-nowrap">
+                      {c.ml_per_car === null ? "—" : `${c.ml_per_car} ml`}
+                      <span className="text-[10px] font-normal text-muted-foreground ml-1.5">({c.litres_used} L)</span>
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* View Details Link */}
           <div className="flex items-center justify-between text-sm font-medium text-muted-foreground group-hover:text-cyan-400 transition-colors pt-4 border-t border-border">
