@@ -294,7 +294,10 @@ export const Route = createFileRoute("/api/public/ingest")({
         // sending to Pulse on its own schedule, completely decoupled from
         // any ESP32's request.
         const pulseUrl = siteRow?.pulse_forward_url as string | null | undefined;
-        if (pulseUrl) {
+        // Data that came FROM Pulse (sent with a key marked forward_to_pulse =
+        // false) is never sent back to Pulse, otherwise it would loop.
+        const fromPulse = (keyRow as any).forward_to_pulse === false;
+        if (pulseUrl && !fromPulse) {
           // Wrapped: this insert must NEVER be able to affect the response
           // below. The readings themselves are already safely saved by
           // this point — a problem queuing a Pulse forward is a reason to
