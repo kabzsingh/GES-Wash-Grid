@@ -133,7 +133,8 @@ function DashboardPage() {
           });
           chemPerCar = ((usage as any[]) || [])
             .map((u) => ({
-              name: u.name as string,
+              // Multi-machine sites: say which machine, e.g. "Machine 2: Multi Clean"
+              name: (u.machine_name ? `${u.machine_name}: ${u.name}` : u.name) as string,
               ml_per_car: u.ml_per_car === null ? null : Number(u.ml_per_car),
               litres_used: Number(u.litres_used),
               washes: Number(u.washes),

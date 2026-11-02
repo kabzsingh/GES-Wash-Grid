@@ -37,7 +37,9 @@ interface Site {
   poll_interval_seconds?: number;
   pulse_forward_url?: string | null;
 }
-interface Meter { id: string; site_id: string; meter_type: "wash"|"fresh_water"|"chemical"|"chemical_flow"; name: string; unit: string; capacity: number | null; low_threshold: number | null; device_key: string; position: number; chemical_group: string | null; modbus_address: number | null; sensor_type: "switch" | "probe" | "counter"; count_for_avg_water: boolean }
+interface Meter { id: string; site_id: string; meter_type: "wash"|"fresh_water"|"chemical"|"chemical_flow"; name: string; unit: string; capacity: number | null; low_threshold: number | null; device_key: string; position: number; chemical_group: string | null; modbus_address: number | null; sensor_type: "switch" | "probe" | "counter"; count_for_avg_water: boolean; machine_id?: string | null }
+// A wash machine at a site, with its own HMI. Sites without machines use one HMI for all meters.
+interface Machine { id: string; site_id: string; name: string; hmi_ip: string | null; position: number }
 interface ApiKeyRow { id: string; site_id: string; key_prefix: string; label: string | null; revoked: boolean; last_used_at: string | null; created_at: string }
 
 const SETUP_SQL_HINT =
@@ -50,6 +52,7 @@ function AdminPage() {
 
   const [sites, setSites] = useState<Site[]>([]);
   const [meters, setMeters] = useState<Meter[]>([]);
+  const [machines, setMachines] = useState<Machine[]>([]);
   const [keys, setKeys] = useState<ApiKeyRow[]>([]);
   const [newSiteName, setNewSiteName] = useState("");
   const [selectedSiteId, setSelectedSiteId] = useState<string | null>(null);
@@ -72,6 +75,10 @@ function AdminPage() {
       if (mErr) toast.error("Error loading meters: " + mErr.message);
       else setMeters((m as any) ?? []);
 
+      const { data: mc, error: mcErr } = await supabase.from("site_machines" as any).select("*").order("position");
+      if (mcErr) toast.error("Error loading machines: " + mcErr.message);
+      else setMachines((mc as any) ?? []);
+
       const { data: k, error: kErr } = await supabase.from("site_api_keys").select("*").order("created_at");
       if (kErr) toast.error("Error loading API keys: " + kErr.message);
       else setKeys((k as any) ?? []);
@@ -79,6 +86,30 @@ function AdminPage() {
       console.error("Load failed", e);
       toast.error("Failed to load admin data");
     }
+  };
+
+  // ===== Machines (several wash machines at one site, each with its own HMI) =====
+  const addMachine = async (siteId: string, name: string, hmiIp: string): Promise<boolean> => {
+    const position = machines.filter((mc) => mc.site_id === siteId).length;
+    const { error } = await supabase.from("site_machines" as any).insert({ site_id: siteId, name: name.trim(), hmi_ip: hmiIp.trim() || null, position } as any);
+    if (error) { toast.error(error.message); return false; }
+    toast.success("Machine added");
+    load();
+    return true;
+  };
+  const updateMachine = async (id: string, name: string, hmiIp: string): Promise<boolean> => {
+    const { error } = await supabase.from("site_machines" as any).update({ name: name.trim(), hmi_ip: hmiIp.trim() || null } as any).eq("id", id);
+    if (error) { toast.error(error.message); return false; }
+    toast.success("Machine saved");
+    load();
+    return true;
+  };
+  const removeMachine = async (id: string) => {
+    if (!confirm("Remove this machine? Its meters stay, but won't be assigned to a machine until you pick one.")) return;
+    const { error } = await supabase.from("site_machines" as any).delete().eq("id", id);
+    if (error) { toast.error(error.message); return; }
+    toast.success("Machine removed");
+    load();
   };
 
   const getToken = async () => {
@@ -242,11 +273,12 @@ scripts/setup-admin.sql`}
     }
   };
 
-  const updateMeter = async (id: string, updates: { capacity: number | null; low_threshold: number | null; modbus_address?: number | null; sensor_type?: "switch" | "probe" | "counter" }): Promise<boolean> => {
+  const updateMeter = async (id: string, updates: { capacity: number | null; low_threshold: number | null; modbus_address?: number | null; sensor_type?: "switch" | "probe" | "counter"; machine_id?: string | null }): Promise<boolean> => {
     try {
       const payload: any = { capacity: updates.capacity, low_threshold: updates.low_threshold };
       if (updates.modbus_address !== undefined) payload.modbus_address = updates.modbus_address;
       if (updates.sensor_type !== undefined) payload.sensor_type = updates.sensor_type;
+      if (updates.machine_id !== undefined) payload.machine_id = updates.machine_id;
       const { error } = await supabase.from("site_meters")
         .update(payload)
         .eq("id", id);
@@ -404,6 +436,10 @@ scripts/setup-admin.sql`}
               <SiteAdminCard
                 site={site}
                 meters={meters.filter((m) => m.site_id === site.id)}
+                machines={machines.filter((mc) => mc.site_id === site.id)}
+                onAddMachine={(name, ip) => addMachine(site.id, name, ip)}
+                onUpdateMachine={updateMachine}
+                onRemoveMachine={removeMachine}
                 keys={keys.filter((k) => k.site_id === site.id)}
                 onRemoveSite={() => removeSite(site.id)}
                 onAddMeter={(m) => addMeter(site.id, m)}
@@ -462,6 +498,7 @@ scripts/setup-admin.sql`}
         key={sketchSite?.id ?? "esp-sketch-closed"}
         site={sketchSite}
         meters={sketchSite ? meters.filter((m) => m.site_id === sketchSite.id) : []}
+        machines={sketchSite ? machines.filter((mc) => mc.site_id === sketchSite.id) : []}
         onClose={() => setSketchSite(null)}
       />
     </div>
@@ -714,11 +751,82 @@ function SmtpSettingsPanel() {
   );
 }
 
+function MachinesPanel({ machines, meters, onAdd, onUpdate, onRemove }: {
+  machines: Machine[]; meters: Meter[];
+  onAdd: (name: string, hmiIp: string) => Promise<boolean>;
+  onUpdate: (id: string, name: string, hmiIp: string) => Promise<boolean>;
+  onRemove: (id: string) => void;
+}) {
+  const [name, setName] = useState("");
+  const [ip, setIp] = useState("");
+  const [adding, setAdding] = useState(false);
+  const [editId, setEditId] = useState<string | null>(null);
+  const [editName, setEditName] = useState("");
+  const [editIp, setEditIp] = useState("");
+  const unassigned = machines.length > 0 ? meters.filter((m) => !m.machine_id).length : 0;
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-2">
+        <h4 className="text-xs font-bold uppercase tracking-widest text-muted-foreground/80">Machines</h4>
+        <span className="text-[10px] text-muted-foreground">Only needed if this site has more than one machine / HMI</span>
+      </div>
+      {machines.length > 0 && (
+        <div className="space-y-2 mb-3">
+          {machines.map((mc) => (
+            <div key={mc.id} className="rounded-lg border border-border bg-background p-3">
+              {editId === mc.id ? (
+                <div className="flex flex-col sm:flex-row gap-2">
+                  <Input className="h-8 text-xs" value={editName} onChange={(e) => setEditName(e.target.value)} placeholder="Machine name" />
+                  <Input className="h-8 text-xs font-mono" value={editIp} onChange={(e) => setEditIp(e.target.value)} placeholder="HMI IP e.g. 192.168.8.11" />
+                  <Button size="sm" className="h-8 text-xs" onClick={async () => { if (await onUpdate(mc.id, editName, editIp)) setEditId(null); }}>Save</Button>
+                  <Button size="sm" variant="outline" className="h-8 text-xs" onClick={() => setEditId(null)}>Cancel</Button>
+                </div>
+              ) : (
+                <div className="flex items-center justify-between gap-2">
+                  <div>
+                    <div className="text-sm font-semibold">{mc.name}</div>
+                    <div className={`text-[11px] font-mono ${mc.hmi_ip ? "text-muted-foreground" : "text-amber-500"}`}>
+                      {mc.hmi_ip ? `HMI ${mc.hmi_ip}` : "HMI IP not set"} · {meters.filter((m) => m.machine_id === mc.id).length} meters
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-primary" onClick={() => { setEditId(mc.id); setEditName(mc.name); setEditIp(mc.hmi_ip ?? ""); }}>
+                      <Pencil className="h-3.5 w-3.5" />
+                    </Button>
+                    <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-destructive" onClick={() => onRemove(mc.id)}>
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </div>
+          ))}
+          {unassigned > 0 && (
+            <p className="text-[11px] text-amber-600">
+              {unassigned} meter{unassigned === 1 ? " isn't" : "s aren't"} assigned to a machine yet. Edit each meter below and pick its machine; unassigned meters are left out of the sketch.
+            </p>
+          )}
+        </div>
+      )}
+      <div className="flex flex-col sm:flex-row gap-2">
+        <Input className="h-8 text-xs" value={name} onChange={(e) => setName(e.target.value)} placeholder={`Machine name e.g. Machine ${machines.length + 1}`} />
+        <Input className="h-8 text-xs font-mono" value={ip} onChange={(e) => setIp(e.target.value)} placeholder="HMI IP e.g. 192.168.8.10" />
+        <Button size="sm" className="h-8 text-xs" disabled={adding || !name.trim()}
+          onClick={async () => { setAdding(true); if (await onAdd(name, ip)) { setName(""); setIp(""); } setAdding(false); }}>
+          <Plus className="h-3.5 w-3.5 mr-1" /> Add machine
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 function MeterRow({
-  meter, onUpdateMeter, onToggleAvgWaterMeter, onRemoveMeter,
+  meter, machines = [], onUpdateMeter, onToggleAvgWaterMeter, onRemoveMeter,
 }: {
   meter: Meter;
-  onUpdateMeter: (id: string, updates: { capacity: number | null; low_threshold: number | null; modbus_address?: number | null; sensor_type?: "switch" | "probe" | "counter" }) => Promise<boolean>;
+  machines?: Machine[];
+  onUpdateMeter: (id: string, updates: { capacity: number | null; low_threshold: number | null; modbus_address?: number | null; sensor_type?: "switch" | "probe" | "counter"; machine_id?: string | null }) => Promise<boolean>;
   onToggleAvgWaterMeter: (id: string, checked: boolean) => Promise<boolean>;
   onRemoveMeter: (id: string) => void;
 }) {
@@ -727,6 +835,8 @@ function MeterRow({
   const [lowThreshold, setLowThreshold] = useState(meter.low_threshold != null ? String(meter.low_threshold) : "");
   const [modbusAddress, setModbusAddress] = useState(meter.modbus_address != null ? String(meter.modbus_address) : "");
   const [sensorType, setSensorType] = useState<"switch" | "probe" | "counter">(meter.sensor_type ?? "switch");
+  const [machineId, setMachineId] = useState<string>(meter.machine_id ?? "none");
+  const machineName = machines.find((mc) => mc.id === meter.machine_id)?.name;
   const [saving, setSaving] = useState(false);
   const [savingAvgWater, setSavingAvgWater] = useState(false);
   const isChemical = meter.meter_type === "chemical" || meter.meter_type === "chemical_flow";
@@ -740,6 +850,7 @@ function MeterRow({
       low_threshold: lowThreshold.trim() ? Number(lowThreshold) : null,
       modbus_address: modbusAddress.trim() ? Number(modbusAddress) : null,
       sensor_type: isChemicalLevel ? sensorType : undefined,
+      machine_id: machines.length > 0 ? (machineId === "none" ? null : machineId) : undefined,
     });
     setSaving(false);
     if (ok) setEditing(false);
@@ -779,6 +890,11 @@ function MeterRow({
               {!editing && meter.low_threshold != null && (
                 <span className="text-[10px] text-muted-foreground/60">Float trips at: {meter.low_threshold}{meter.unit} used</span>
               )}
+              {!editing && machines.length > 0 && (
+                <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-bold border ${machineName ? "bg-primary/10 text-primary border-primary/20" : "bg-amber-500/10 text-amber-600 border-amber-500/30"}`}>
+                  {machineName ?? "NO MACHINE"}
+                </span>
+              )}
               {!editing && (
                 <span className={`text-[10px] font-mono ${meter.modbus_address != null ? "text-muted-foreground/60" : "text-amber-500"}`}>
                   {meter.modbus_address != null ? `Modbus: ${meter.modbus_address}` : "Modbus: not set"}
@@ -811,6 +927,20 @@ function MeterRow({
 
       {editing && (
         <div className="mt-3 pt-3 border-t border-border/60 grid grid-cols-2 gap-3 items-end">
+          {machines.length > 0 && (
+            <div className="space-y-1 col-span-2">
+              <Label className="text-[10px]">Machine (which HMI this meter is read from)</Label>
+              <Select value={machineId} onValueChange={setMachineId}>
+                <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">— Not assigned —</SelectItem>
+                  {machines.map((mc) => (
+                    <SelectItem key={mc.id} value={mc.id}>{mc.name}{mc.hmi_ip ? ` (${mc.hmi_ip})` : ""}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
           <div className="space-y-1">
             <Label className="text-[10px]">HMI Modbus Address (mapping table)</Label>
             <Input
@@ -875,12 +1005,16 @@ function MeterRow({
 }
 
 function SiteAdminCard({
-  site, meters, keys, onRemoveSite, onAddMeter, onUpdateMeter, onToggleAvgWaterMeter, onRemoveMeter, onGenerateKey, onRevokeKey, onGenerateSketch, onUpdateBranding, onUpdateSiteDetails,
+  site, meters, machines, onAddMachine, onUpdateMachine, onRemoveMachine, keys, onRemoveSite, onAddMeter, onUpdateMeter, onToggleAvgWaterMeter, onRemoveMeter, onGenerateKey, onRevokeKey, onGenerateSketch, onUpdateBranding, onUpdateSiteDetails,
 }: {
   site: Site; meters: Meter[]; keys: ApiKeyRow[];
+  machines: Machine[];
+  onAddMachine: (name: string, hmiIp: string) => Promise<boolean>;
+  onUpdateMachine: (id: string, name: string, hmiIp: string) => Promise<boolean>;
+  onRemoveMachine: (id: string) => void;
   onRemoveSite: () => void;
   onAddMeter: (m: Partial<Meter>) => Promise<boolean>;
-  onUpdateMeter: (id: string, updates: { capacity: number | null; low_threshold: number | null; modbus_address?: number | null; sensor_type?: "switch" | "probe" | "counter" }) => Promise<boolean>;
+  onUpdateMeter: (id: string, updates: { capacity: number | null; low_threshold: number | null; modbus_address?: number | null; sensor_type?: "switch" | "probe" | "counter"; machine_id?: string | null }) => Promise<boolean>;
   onToggleAvgWaterMeter: (id: string, checked: boolean) => Promise<boolean>;
   onRemoveMeter: (id: string) => void;
   onGenerateKey: () => void;
@@ -991,6 +1125,8 @@ function SiteAdminCard({
       </div>
 
       <div className="p-6 space-y-8">
+        <MachinesPanel machines={machines} meters={meters} onAdd={onAddMachine} onUpdate={onUpdateMachine} onRemove={onRemoveMachine} />
+
         <div>
           <div className="flex items-center justify-between mb-4">
             <h4 className="text-xs font-bold uppercase tracking-widest text-muted-foreground/80">Meter & Sensor Configuration</h4>
@@ -998,7 +1134,7 @@ function SiteAdminCard({
 
           <div className="space-y-2">
             {meters.map((m) => (
-              <MeterRow key={m.id} meter={m} onUpdateMeter={onUpdateMeter} onToggleAvgWaterMeter={onToggleAvgWaterMeter} onRemoveMeter={onRemoveMeter} />
+              <MeterRow key={m.id} meter={m} machines={machines} onUpdateMeter={onUpdateMeter} onToggleAvgWaterMeter={onToggleAvgWaterMeter} onRemoveMeter={onRemoveMeter} />
             ))}
 
             {meters.length === 0 && (
@@ -1613,22 +1749,35 @@ function ReportSettings({ site, onSaved }: { site: Site; onSaved: () => void }) 
   );
 }
 
-function buildEsp32Sketch(site: Site, meters: Meter[]) {
+function buildEsp32Sketch(site: Site, meters: Meter[], machines: Machine[] = []) {
   const endpoint = `${typeof window !== "undefined" ? window.location.origin : "https://your-deployment-url.com"}/api/public/ingest`;
   const pollIntervalSeconds = site.poll_interval_seconds ?? 15;
 
   // Only meters with an HMI Modbus Address configured (in Admin > Meter &
   // Sensor Configuration) can be included in the generated sketch — that
   // address is what tells the ESP32 where to read this meter's value from.
-  const configured = meters.filter((m) => m.modbus_address != null);
+  // Multi-machine sites: every meter must say which machine (HMI) it's on,
+  // and meters are read machine by machine to keep reconnects to a minimum.
+  const multi = machines.length > 0;
+  const machineIndex = new Map(machines.map((mc, i) => [mc.id, i]));
+  const onMachine = (m: Meter) => !multi || (m.machine_id != null && machineIndex.has(m.machine_id));
+  const configured = meters
+    .filter((m) => m.modbus_address != null && onMachine(m))
+    .sort((a, b) => multi ? (machineIndex.get(a.machine_id!)! - machineIndex.get(b.machine_id!)!) || (a.position - b.position) : 0);
   const missing = meters.filter((m) => m.modbus_address == null);
+  const noMachine = multi ? meters.filter((m) => m.modbus_address != null && !onMachine(m)) : [];
 
   const meterEntries = configured.length > 0
     ? configured
         .map((m) => {
           const zeroBased = (m.modbus_address as number) - 1;
-          const safeName = m.name.replace(/"/g, '\\"');
           const safeKey = m.device_key.replace(/"/g, '\\"');
+          if (multi) {
+            const idx = machineIndex.get(m.machine_id!)!;
+            const safeLabel = `${machines[idx].name}: ${m.name}`.replace(/"/g, '\\"');
+            return `  { ${zeroBased}, "${safeKey}", "${safeLabel}", ${idx} },  // ${machines[idx].name}, mapping table ${m.modbus_address}`;
+          }
+          const safeName = m.name.replace(/"/g, '\\"');
           return `  { ${zeroBased}, "${safeKey}", "${safeName}" },  // mapping table ${m.modbus_address}`;
         })
         .join("\n")
@@ -1638,7 +1787,8 @@ function buildEsp32Sketch(site: Site, meters: Meter[]) {
     ? configured
         .map((m) => {
           const addr = m.modbus_address as number;
-          return `//   Modbus Addr ${addr}-${addr + 1}  ->  ${m.name}  (DWORD)  [device_key ${m.device_key}]`;
+          const where = multi ? `${machines[machineIndex.get(m.machine_id!)!].name}: ` : "";
+          return `//   Modbus Addr ${addr}-${addr + 1}  ->  ${where}${m.name}  (DWORD)  [device_key ${m.device_key}]`;
         })
         .join("\n")
     : "//   (no meters configured yet)";
@@ -1646,6 +1796,10 @@ function buildEsp32Sketch(site: Site, meters: Meter[]) {
   const missingComment = missing.length > 0
     ? "//\n// ⚠ The following meters have NO Modbus Address set in Admin yet, so they\n// are NOT included below. Set each one's HMI Modbus Address in Admin > this\n// site > Meter & Sensor Configuration, then regenerate this sketch:\n" +
       missing.map((m) => `//   - ${m.name} (device_key ${m.device_key})`).join("\n") + "\n"
+    : "";
+  const noMachineComment = noMachine.length > 0
+    ? "//\n// ⚠ This site has machines, but these meters aren't assigned to one, so\n// they are NOT included below. Pick a Machine for each in Admin:\n" +
+      noMachine.map((m) => `//   - ${m.name} (device_key ${m.device_key})`).join("\n") + "\n"
     : "";
 
   const sketch = `// Auto-generated for site: ${site.name}
@@ -1677,7 +1831,7 @@ function buildEsp32Sketch(site: Site, meters: Meter[]) {
 //
 // === MODBUS MAPPING (from DOPSoft Modbus TCP Mapping Table) ===
 ${mappingComment}
-${missingComment}//
+${missingComment}${noMachineComment}//
 // NOTE ON MODBUS ADDRESSING: mapping table addresses are 1-based
 // (e.g. 3025). The wire protocol is 0-based, so 3025 in the table
 // means we request address 3024. This -1 offset is already applied.
@@ -2260,12 +2414,100 @@ void loop() {
 }
 `;
 
-  return sketch;
+  return multi ? toMultiMachineSketch(sketch, machines) : sketch;
 }
 
 
-function EspSketchDialog({ site, meters, onClose }: { site: Site | null; meters: Meter[]; onClose: () => void }) {
-  const code = site ? buildEsp32Sketch(site, meters) : "";
+// Turns the proven single-HMI sketch into one that reads each meter from its
+// own machine's HMI. Only used for sites that have machines set up in Admin;
+// every other site gets the single-HMI sketch unchanged. Each step must match
+// the single-HMI sketch exactly, or this throws instead of producing a
+// half-converted sketch.
+function toMultiMachineSketch(sketch: string, machines: Machine[]): string {
+  const ips = machines.map((mc) => `"${(mc.hmi_ip || "").replace(/"/g, "")}"`).join(", ");
+  const names = machines.map((mc) => `"${mc.name.replace(/"/g, '\\"')}"`).join(", ");
+  const missingIp = machines.filter((mc) => !mc.hmi_ip);
+  const steps: [string, string][] = [
+    [String.raw`const char* HMI_IP = "";   // TODO: site HMI IP, e.g. "192.168.8.10"`,
+     String.raw`// One HMI per machine (each is a Modbus TCP Server). IPs are set in
+// Admin > this site > Machines.` + (missingIp.length ? `
+// TODO: no HMI IP set in Admin for: ${missingIp.map((mc) => mc.name).join(", ")}` : "") + `
+const char* HMI_IPS[]   = { ${ips} };
+const char* HMI_NAMES[] = { ${names} };
+const int   NUM_HMIS    = ${machines.length};`],
+    ["  const char* label;\n};",
+     "  const char* label;\n  int hmi;          // which machine's HMI (index into HMI_IPS)\n};"],
+    [String.raw`bool ensureModbusConnected(bool forceReconnect = false) {
+  if (forceReconnect && modbusSocket.connected()) {
+    modbusSocket.stop();
+  }
+  if (modbusSocket.connected()) return true;
+
+  Serial.print("Connecting to HMI Modbus TCP...");
+  if (!modbusSocket.connect(HMI_IP, MODBUS_PORT)) {
+    Serial.println(" FAILED");
+    return false;
+  }
+  modbusSocket.setTimeout(2000);
+  Serial.println(" OK");
+  pollsSinceSocketOpen = 0;
+  return true;
+}`,
+     String.raw`int connectedHmi = -1;   // which machine's HMI the Modbus socket is open to
+
+// Opens the Modbus socket to the given machine's HMI, closing it first if
+// it's open to a different one. Meters are read machine by machine, so this
+// reconnects once per machine per reading cycle.
+bool ensureModbusConnected(int hmi, bool forceReconnect = false) {
+  if (modbusSocket.connected() && (forceReconnect || connectedHmi != hmi)) {
+    modbusSocket.stop();
+    connectedHmi = -1;
+  }
+  if (modbusSocket.connected()) return true;
+
+  Serial.printf("Connecting to %s HMI (%s) Modbus TCP...", HMI_NAMES[hmi], HMI_IPS[hmi]);
+  if (!modbusSocket.connect(HMI_IPS[hmi], MODBUS_PORT)) {
+    Serial.println(" FAILED");
+    connectedHmi = -1;
+    return false;
+  }
+  modbusSocket.setTimeout(2000);
+  Serial.println(" OK");
+  connectedHmi = hmi;
+  pollsSinceSocketOpen = 0;
+  return true;
+}`],
+    ["bool modbusReadHoldingRegistersOnce(uint16_t startAddr, uint16_t numRegs, uint16_t outRegs[]) {\n  if (!ensureModbusConnected()) return false;",
+     "bool modbusReadHoldingRegistersOnce(int hmi, uint16_t startAddr, uint16_t numRegs, uint16_t outRegs[]) {\n  if (!ensureModbusConnected(hmi)) return false;"],
+    ["bool modbusReadHoldingRegisters(uint16_t startAddr, uint16_t numRegs, uint16_t outRegs[]) {",
+     "bool modbusReadHoldingRegisters(int hmi, uint16_t startAddr, uint16_t numRegs, uint16_t outRegs[]) {"],
+    ["    if (modbusReadHoldingRegistersOnce(startAddr, numRegs, outRegs)) return true;",
+     "    if (modbusReadHoldingRegistersOnce(hmi, startAddr, numRegs, outRegs)) return true;"],
+    ["    ensureModbusConnected(true); // force reconnect before next attempt",
+     "    ensureModbusConnected(hmi, true); // force reconnect before next attempt"],
+    ["Serial.println(\"Refreshing Modbus socket (periodic maintenance)\");\n    ensureModbusConnected(true);",
+     "Serial.println(\"Refreshing Modbus socket (periodic maintenance)\");\n    modbusSocket.stop();\n    connectedHmi = -1;"],
+    ["if (!modbusReadHoldingRegisters((uint16_t)meters[i].modbusAddr, 2, regs)) {",
+     "if (!modbusReadHoldingRegisters(meters[i].hmi, (uint16_t)meters[i].modbusAddr, 2, regs)) {"],
+  ];
+  let out = sketch;
+  for (const [from, to] of steps) {
+    const count = out.split(from).length - 1;
+    if (count !== 1) throw new Error(`Multi-machine sketch: expected 1 match, found ${count}: ${from.slice(0, 60)}`);
+    out = out.replace(from, () => to);
+  }
+  out = out.replace(/Fill in WIFI_SSID \/ WIFI_PASS \/ HMI_IP for /, "Fill in WIFI_SSID / WIFI_PASS (HMI IPs come from Admin > Machines) for ");
+  out = out.replace("// Auto-generated for site: ", `// MULTI-MACHINE (${machines.length} machines, one HMI each)\n// Auto-generated for site: `);
+  return out;
+}
+
+
+function EspSketchDialog({ site, meters, machines, onClose }: { site: Site | null; meters: Meter[]; machines: Machine[]; onClose: () => void }) {
+  let code = "";
+  if (site) {
+    try { code = buildEsp32Sketch(site, meters, machines); }
+    catch (e: any) { code = `// Could not generate the multi-machine sketch: ${e?.message || e}\n// Please report this so it can be fixed.`; }
+  }
   return (
     <Dialog open={!!site} onOpenChange={(o) => { if (!o) onClose(); }}>
       <DialogContent className="max-w-3xl max-h-[90vh] flex flex-col gap-4 overflow-hidden shadow-2xl">

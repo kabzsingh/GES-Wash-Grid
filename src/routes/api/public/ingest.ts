@@ -236,8 +236,13 @@ export const Route = createFileRoute("/api/public/ingest")({
         // Process chemical state changes and track low events
         let chemicalEvents = 0;
         for (const chem of chemicalSwitchReadings) {
-          // Find the wash meter for this site to get current wash count
-          const washMeter = meters.find((m) => m.meter_type === "wash");
+          // The wash counter for this float: on multi-machine sites, the wash
+          // counter on the SAME machine as the float; otherwise the site's.
+          const chemMeter = meters.find((m) => m.id === chem.meter_id) as any;
+          const washMeter =
+            (chemMeter?.machine_id &&
+              meters.find((m) => m.meter_type === "wash" && (m as any).machine_id === chemMeter.machine_id)) ||
+            meters.find((m) => m.meter_type === "wash");
           
           try {
             const { data } = await db.rpc('handle_chemical_state_change', {

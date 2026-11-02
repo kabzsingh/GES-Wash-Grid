@@ -24,6 +24,7 @@ interface Meter {
   chemical_group: string | null;
   sensor_type?: "switch" | "probe" | "counter";
   count_for_avg_water?: boolean;
+  machine_id?: string | null;
 }
 interface Reading {
   meter_id: string;
@@ -68,8 +69,13 @@ function SiteDetail() {
   // as a flash of "0" — it just keeps showing the last real number until a
   // fresh one arrives.
   const lastKnownWashesSinceLowRef = useRef<Record<string, number>>({});
-  const [washTrendData, setWashTrendData] = useState<{ time: string; washes: number }[]>([]);
-  const [waterTrendData, setWaterTrendData] = useState<{ time: string; liters: number }[]>([]);
+  // Daily trend per meter; the charts add up whichever meters are shown
+  // (all of them, or one machine's on a multi-machine site).
+  const [washTrendByMeter, setWashTrendByMeter] = useState<Record<string, { time: string; value: number }[]>>({});
+  const [waterTrendByMeter, setWaterTrendByMeter] = useState<Record<string, { time: string; value: number }[]>>({});
+  // Multi-machine sites: each machine has its own counter, meters and floats.
+  const [machines, setMachines] = useState<{ id: string; name: string }[]>([]);
+  const [selectedMachine, setSelectedMachine] = useState<string>("all");
   const [chemicalFillHistory, setChemicalFillHistory] = useState<{ meter_id: string; went_low_at: string; topped_up_at: string | null; wash_count_at_low: number | null; wash_count_at_topup: number | null; washes_during_low: number | null }[]>([]);
   const dayBaselineRef = useRef<Record<string, number>>({});
   useEffect(() => { dayBaselineRef.current = dayBaseline; }, [dayBaseline]);
@@ -111,7 +117,7 @@ function SiteDetail() {
       supabase.from("sites").select("name,location,machine_type,fresh_water_daily_threshold_liters,primary_color,secondary_color,accent_color").eq("id", siteId).single(),
       supabase
         .from("site_meters")
-        .select("id,meter_type,name,unit,capacity,low_threshold,device_key,position,chemical_group,sensor_type,count_for_avg_water")
+        .select("id,meter_type,name,unit,capacity,low_threshold,device_key,position,chemical_group,sensor_type,count_for_avg_water,machine_id")
         .eq("site_id", siteId)
         .order("position"),
       supabase.from("site_api_keys").select("last_used_at").eq("site_id", siteId).order("last_used_at", { ascending: false }).limit(1),
@@ -120,6 +126,8 @@ function SiteDetail() {
     const keyLastUsed = (apiKeys as any)?.[0]?.last_used_at ?? null;
     setEsp32LastSeen(keyLastUsed);
     setMeters((m as any) ?? []);
+    const { data: mc } = await supabase.from("site_machines" as any).select("id,name,position").eq("site_id", siteId).order("position");
+    setMachines(((mc as any[]) ?? []).map((x) => ({ id: x.id, name: x.name })));
 
     const since = new Date(Date.now() - 24 * 60 * 60_000).toISOString();
     // startOfDay is needed for several queries below — compute it once up-front
@@ -324,11 +332,15 @@ function SiteDetail() {
       return result;
     };
 
-    const washMeterForTrend = (m as any)?.find((x: Meter) => x.meter_type === "wash");
-    if (washMeterForTrend) {
-      const points = await Promise.all(dayCutoffs.map((c) => lastValueAtOrBefore(washMeterForTrend.id, c)));
-      const trendData = dailyDeltas(points).map((d) => ({ time: d.time, washes: d.value }));
-      setWashTrendData(trendData);
+    // Every wash counter (one per machine on multi-machine sites), not just the first.
+    const washMetersForTrend = ((m as any) ?? []).filter((x: Meter) => x.meter_type === "wash");
+    if (washMetersForTrend.length > 0) {
+      const series: Record<string, { time: string; value: number }[]> = {};
+      await Promise.all(washMetersForTrend.map(async (wm: Meter) => {
+        const points = await Promise.all(dayCutoffs.map((c) => lastValueAtOrBefore(wm.id, c)));
+        series[wm.id] = dailyDeltas(points);
+      }));
+      setWashTrendByMeter(series);
     }
 
     // A site can have multiple fresh_water meters (e.g. Rinse Water,
@@ -338,17 +350,12 @@ function SiteDetail() {
     // tracks whichever meter happened to come back first from the query.
     const waterMetersForTrend = ((m as any) ?? []).filter((x: Meter) => x.meter_type === "fresh_water");
     if (waterMetersForTrend.length > 0) {
-      const perMeterTrends = await Promise.all(
-        waterMetersForTrend.map(async (wm: Meter) => {
-          const points = await Promise.all(dayCutoffs.map((c) => lastValueAtOrBefore(wm.id, c)));
-          return dailyDeltas(points);
-        })
-      );
-      const combined = dayCutoffs.slice(1).map((c, i) => ({
-        time: c.toLocaleDateString("en-US", { month: "short", day: "numeric" }),
-        liters: perMeterTrends.reduce((sum, trend) => sum + (trend[i]?.value ?? 0), 0),
+      const series: Record<string, { time: string; value: number }[]> = {};
+      await Promise.all(waterMetersForTrend.map(async (wm: Meter) => {
+        const points = await Promise.all(dayCutoffs.map((c) => lastValueAtOrBefore(wm.id, c)));
+        series[wm.id] = dailyDeltas(points);
       }));
-      setWaterTrendData(combined);
+      setWaterTrendByMeter(series);
     }
 
     // Fetch persisted chemical fill history (recorded server-side by handle_chemical_state_change)
@@ -433,6 +440,25 @@ function SiteDetail() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [siteId]);
 
+  // Meters on the selected machine (or all of them).
+  const shownMeters = useMemo(
+    () => (selectedMachine === "all" ? meters : meters.filter((m) => m.machine_id === selectedMachine)),
+    [meters, selectedMachine]
+  );
+  const sumSeries = (byMeter: Record<string, { time: string; value: number }[]>, ids: string[]) => {
+    const lists = ids.map((id) => byMeter[id]).filter(Boolean);
+    if (lists.length === 0) return [] as { time: string; value: number }[];
+    return lists[0].map((pt, i) => ({ time: pt.time, value: lists.reduce((sum, l) => sum + (l[i]?.value ?? 0), 0) }));
+  };
+  const washTrendData = useMemo(
+    () => sumSeries(washTrendByMeter, shownMeters.filter((m) => m.meter_type === "wash").map((m) => m.id)).map((d) => ({ time: d.time, washes: d.value })),
+    [washTrendByMeter, shownMeters]
+  );
+  const waterTrendData = useMemo(
+    () => sumSeries(waterTrendByMeter, shownMeters.filter((m) => m.meter_type === "fresh_water").map((m) => m.id)).map((d) => ({ time: d.time, liters: d.value })),
+    [waterTrendByMeter, shownMeters]
+  );
+
   const stats = useMemo(() => {
     const latestByMeter = new Map<string, Reading>();
     for (const r of readings) {
@@ -444,7 +470,7 @@ function SiteDetail() {
       }
     }
     const sumBy = (type: Meter["meter_type"], src: Record<string, number>) =>
-      meters.filter((m) => m.meter_type === type).reduce((s, m) => s + (src[m.id] ?? 0), 0);
+      shownMeters.filter((m) => m.meter_type === type).reduce((s, m) => s + (src[m.id] ?? 0), 0);
     return {
       washToday: sumBy("wash", todays),
       washLifetime: sumBy("wash", totals),
@@ -452,11 +478,11 @@ function SiteDetail() {
       freshLifetime: sumBy("fresh_water", totals),
       latestByMeter,
     };
-  }, [readings, meters, totals, todays]);
+  }, [readings, meters, shownMeters, totals, todays]);
 
-  const chemicalLevelMeters = meters.filter((m) => m.meter_type === "chemical");
-  const washMeters = meters.filter((m) => m.meter_type === "wash");
-  const freshMeters = meters.filter((m) => m.meter_type === "fresh_water");
+  const chemicalLevelMeters = shownMeters.filter((m) => m.meter_type === "chemical");
+  const washMeters = shownMeters.filter((m) => m.meter_type === "wash");
+  const freshMeters = shownMeters.filter((m) => m.meter_type === "fresh_water");
 
   // Average water used per car = today's usage from whichever fresh_water
   // meter(s) are marked "Count this meter in Avg Water / Car" in Admin
@@ -535,6 +561,25 @@ function SiteDetail() {
           </div>
         </div>
       </div>
+
+      {/* Machine tabs (multi-machine sites only) */}
+      {machines.length > 0 && (
+        <div className="flex flex-wrap gap-2">
+          {[{ id: "all", name: "All machines" }, ...machines].map((mc) => (
+            <button
+              key={mc.id}
+              onClick={() => setSelectedMachine(mc.id)}
+              className={`px-3 py-1.5 rounded-full text-sm font-medium border transition-colors ${
+                selectedMachine === mc.id
+                  ? "bg-primary text-primary-foreground border-primary"
+                  : "bg-muted text-muted-foreground border-border hover:text-foreground"
+              }`}
+            >
+              {mc.name}
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* Metrics Grid */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
@@ -860,7 +905,9 @@ function SiteDetail() {
                   const activeDbEvent = chemicalFillHistory.find(
                     (e) => e.meter_id === lvl.id && e.topped_up_at === null,
                   );
-                  const washMeterForSite = meters.find((mm) => mm.meter_type === "wash");
+                  const washMeterForSite =
+                    (lvl.machine_id && meters.find((mm) => mm.meter_type === "wash" && mm.machine_id === lvl.machine_id)) ||
+                    meters.find((mm) => mm.meter_type === "wash");
                   const currentWashTotal = washMeterForSite
                     ? stats.latestByMeter.get(washMeterForSite.id)?.value
                     : undefined;
