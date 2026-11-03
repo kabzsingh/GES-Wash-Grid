@@ -34,6 +34,31 @@ async function keyFor(db: any, token: string) {
   }
 }
 
+// Records an attempt that wasn't accepted (wrong/revoked key, unexpected
+// method), so a misconfigured Pulse link can be diagnosed. Only the first 12
+// characters of the key are kept.
+async function logRejected(db: any, request: Request, token: string, reason: string) {
+  try {
+    const headers: Record<string, string> = {};
+    request.headers.forEach((v, k) => {
+      if (!["cookie", "authorization", "x-site-api-key"].includes(k.toLowerCase())) headers[k] = v;
+    });
+    const bodyText = request.method === "GET" || request.method === "HEAD" ? "" : await request.text().catch(() => "");
+    await db.from("pulse_inbound").insert({
+      site_id: null,
+      headers: { ...headers, _method: request.method, _key_prefix: (token || "").slice(0, 12), _key_length: String((token || "").length) },
+      body_text: bodyText.slice(0, 20000),
+      result: `rejected: ${reason}`,
+    });
+  } catch { /* never let logging break the response */ }
+}
+
+async function rejectOther({ request, params }: { request: Request; params: { token: string } }) {
+  const env = getRuntimeEnv() as unknown as Env;
+  await logRejected(getSupabaseAdmin(env), request, params.token, `method ${request.method} not supported`);
+  return json({ ok: false, error: "Use POST" }, 405);
+}
+
 export const Route = createFileRoute("/api/public/pulse/$token")({
   server: {
     handlers: {
@@ -47,6 +72,8 @@ export const Route = createFileRoute("/api/public/pulse/$token")({
         return json({ ok: true, site: site?.name ?? null, accepts: "POST" });
       },
 
+      PUT: rejectOther,
+      PATCH: rejectOther,
       POST: async ({ request, params }: { request: Request; params: { token: string } }) => {
         const env = getRuntimeEnv() as unknown as Env;
         if (!env?.SUPABASE_URL || !env?.SUPABASE_SERVICE_ROLE_KEY) {
@@ -54,7 +81,10 @@ export const Route = createFileRoute("/api/public/pulse/$token")({
         }
         const db = getSupabaseAdmin(env);
         const row = await keyFor(db, params.token);
-        if (!row) return json({ ok: false, error: "Invalid or revoked link" }, 401);
+        if (!row) {
+          await logRejected(db, request, params.token, "invalid or revoked key");
+          return json({ ok: false, error: "Invalid or revoked link" }, 401);
+        }
 
         const bodyText = await request.text();
         let bodyJson: any = null;
