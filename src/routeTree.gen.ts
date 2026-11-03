@@ -23,7 +23,6 @@ import { Route as ApiPublicHooksCleanupReportsRouteImport } from './routes/api/p
 import { Route as ApiPublicHooksFlushPulseQueueRouteImport } from './routes/api/public/hooks/flush-pulse-queue'
 import { Route as ApiPublicHooksSendReportsRouteImport } from './routes/api/public/hooks/send-reports'
 import { Route as ApiPublicPulseTokenRouteImport } from './routes/api/public/pulse.$token'
-import { Route as ApiPublicPulseTokenSplatRouteImport } from './routes/api/public/pulse.$token.$'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -99,12 +98,6 @@ const ApiPublicPulseTokenRoute = ApiPublicPulseTokenRouteImport.update({
   path: '/api/public/pulse/$token',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ApiPublicPulseTokenSplatRoute =
-  ApiPublicPulseTokenSplatRouteImport.update({
-    id: '/$',
-    path: '/$',
-    getParentRoute: () => ApiPublicPulseTokenRoute,
-  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -119,8 +112,7 @@ export interface FileRoutesByFullPath {
   '/api/public/hooks/cleanup-reports': typeof ApiPublicHooksCleanupReportsRoute
   '/api/public/hooks/flush-pulse-queue': typeof ApiPublicHooksFlushPulseQueueRoute
   '/api/public/hooks/send-reports': typeof ApiPublicHooksSendReportsRoute
-  '/api/public/pulse/$token': typeof ApiPublicPulseTokenRouteWithChildren
-  '/api/public/pulse/$token/$': typeof ApiPublicPulseTokenSplatRoute
+  '/api/public/pulse/$token': typeof ApiPublicPulseTokenRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -135,8 +127,7 @@ export interface FileRoutesByTo {
   '/api/public/hooks/cleanup-reports': typeof ApiPublicHooksCleanupReportsRoute
   '/api/public/hooks/flush-pulse-queue': typeof ApiPublicHooksFlushPulseQueueRoute
   '/api/public/hooks/send-reports': typeof ApiPublicHooksSendReportsRoute
-  '/api/public/pulse/$token': typeof ApiPublicPulseTokenRouteWithChildren
-  '/api/public/pulse/$token/$': typeof ApiPublicPulseTokenSplatRoute
+  '/api/public/pulse/$token': typeof ApiPublicPulseTokenRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -153,8 +144,7 @@ export interface FileRoutesById {
   '/api/public/hooks/cleanup-reports': typeof ApiPublicHooksCleanupReportsRoute
   '/api/public/hooks/flush-pulse-queue': typeof ApiPublicHooksFlushPulseQueueRoute
   '/api/public/hooks/send-reports': typeof ApiPublicHooksSendReportsRoute
-  '/api/public/pulse/$token': typeof ApiPublicPulseTokenRouteWithChildren
-  '/api/public/pulse/$token/$': typeof ApiPublicPulseTokenSplatRoute
+  '/api/public/pulse/$token': typeof ApiPublicPulseTokenRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -172,7 +162,6 @@ export interface FileRouteTypes {
     | '/api/public/hooks/flush-pulse-queue'
     | '/api/public/hooks/send-reports'
     | '/api/public/pulse/$token'
-    | '/api/public/pulse/$token/$'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -188,7 +177,6 @@ export interface FileRouteTypes {
     | '/api/public/hooks/flush-pulse-queue'
     | '/api/public/hooks/send-reports'
     | '/api/public/pulse/$token'
-    | '/api/public/pulse/$token/$'
   id:
     | '__root__'
     | '/'
@@ -205,7 +193,6 @@ export interface FileRouteTypes {
     | '/api/public/hooks/flush-pulse-queue'
     | '/api/public/hooks/send-reports'
     | '/api/public/pulse/$token'
-    | '/api/public/pulse/$token/$'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -218,7 +205,7 @@ export interface RootRouteChildren {
   ApiPublicHooksCleanupReportsRoute: typeof ApiPublicHooksCleanupReportsRoute
   ApiPublicHooksFlushPulseQueueRoute: typeof ApiPublicHooksFlushPulseQueueRoute
   ApiPublicHooksSendReportsRoute: typeof ApiPublicHooksSendReportsRoute
-  ApiPublicPulseTokenRoute: typeof ApiPublicPulseTokenRouteWithChildren
+  ApiPublicPulseTokenRoute: typeof ApiPublicPulseTokenRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -321,13 +308,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiPublicPulseTokenRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/public/pulse/$token/$': {
-      id: '/api/public/pulse/$token/$'
-      path: '/$'
-      fullPath: '/api/public/pulse/$token/$'
-      preLoaderRoute: typeof ApiPublicPulseTokenSplatRouteImport
-      parentRoute: typeof ApiPublicPulseTokenRoute
-    }
   }
 }
 
@@ -349,17 +329,6 @@ const AuthenticatedRouteWithChildren = AuthenticatedRoute._addFileChildren(
   AuthenticatedRouteChildren,
 )
 
-interface ApiPublicPulseTokenRouteChildren {
-  ApiPublicPulseTokenSplatRoute: typeof ApiPublicPulseTokenSplatRoute
-}
-
-const ApiPublicPulseTokenRouteChildren: ApiPublicPulseTokenRouteChildren = {
-  ApiPublicPulseTokenSplatRoute: ApiPublicPulseTokenSplatRoute,
-}
-
-const ApiPublicPulseTokenRouteWithChildren =
-  ApiPublicPulseTokenRoute._addFileChildren(ApiPublicPulseTokenRouteChildren)
-
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AuthenticatedRoute: AuthenticatedRouteWithChildren,
@@ -370,7 +339,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiPublicHooksCleanupReportsRoute: ApiPublicHooksCleanupReportsRoute,
   ApiPublicHooksFlushPulseQueueRoute: ApiPublicHooksFlushPulseQueueRoute,
   ApiPublicHooksSendReportsRoute: ApiPublicHooksSendReportsRoute,
-  ApiPublicPulseTokenRoute: ApiPublicPulseTokenRouteWithChildren,
+  ApiPublicPulseTokenRoute: ApiPublicPulseTokenRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
