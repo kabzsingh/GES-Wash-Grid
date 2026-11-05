@@ -15,7 +15,20 @@ const PayloadSchema = z.object({
     type: z.enum(['total', 'today', 'level', 'event']).default('total').optional(),
     recorded_at: z.string().datetime().optional(),
     ts: z.number().int().positive().optional(),
-  })).min(1).max(200),
+  })).max(200),
+  // Board health (OTA-capable sketches). With no readings, the send is an
+  // "I'm alive" message: e.g. the board is running but can't read the HMI.
+  device: z.object({
+    fw: z.string().max(40).optional(),
+    rssi: z.number().int().optional(),
+    uptime_s: z.number().int().nonnegative().optional(),
+    heap: z.number().int().nonnegative().optional(),
+    reset: z.string().max(40).optional(),
+    hmi_ok: z.boolean().optional(),
+    meters_ok: z.number().int().nonnegative().optional(),
+    meters_total: z.number().int().nonnegative().optional(),
+    queued: z.number().int().nonnegative().optional(),
+  }).optional(),
 });
 
 // Readings timestamped further ahead than this are clamped to "now"
@@ -87,6 +100,28 @@ export const Route = createFileRoute("/api/public/ingest")({
         const map = new Map(meters.map((m) => [m.device_key, { id: m.id, type: m.meter_type, sensorType: (m as any).sensor_type }]));
         const siteRow = Array.isArray((keyRow as any).sites) ? (keyRow as any).sites[0] : (keyRow as any).sites;
 
+        // ---- Board health + remote update (OTA) ----
+        // Recorded whenever the board reports it. If Admin has a newer
+        // firmware for this site than the board says it's running, the
+        // response offers it with a short-lived signed download link.
+        const device = parsed.data.device;
+        let ota: { version: string; url: string } | undefined;
+        if (device) {
+          await db.from("sites").update({ device_status: device, device_seen_at: new Date().toISOString() } as any).eq("id", keyRow.site_id);
+          const wantVersion = siteRow?.firmware_version as string | null | undefined;
+          const path = siteRow?.firmware_path as string | null | undefined;
+          if (wantVersion && path && device.fw && device.fw !== wantVersion) {
+            const { data: signed } = await db.storage.from("firmware").createSignedUrl(path, 15 * 60);
+            if (signed?.signedUrl) ota = { version: wantVersion, url: signed.signedUrl };
+          }
+        }
+        const extra = ota ? { ota } : {};
+        if (parsed.data.readings.length === 0) {
+          // "I'm alive" message only.
+          await db.from("site_api_keys").update({ last_used_at: new Date().toISOString() }).eq("key_hash", hash);
+          return json({ ok: true, accepted: 0, heartbeat: true, ...extra });
+        }
+
         // ---- When was each reading taken? ----
         const nowMs = Date.now();
         const nowIso = new Date(nowMs).toISOString();
@@ -136,7 +171,7 @@ export const Route = createFileRoute("/api/public/ingest")({
           else if (newestMs && nowMs - newestMs < minGapMs && !wentUp) dropReason = "too_soon_after_previous";
           if (dropReason) {
             await db.from("site_api_keys").update({ last_used_at: nowIso }).eq("key_hash", hash);
-            return json({ ok: true, accepted: 0, dropped: dropReason });
+            return json({ ok: true, accepted: 0, dropped: dropReason, ...extra });
           }
         }
 
@@ -221,7 +256,7 @@ export const Route = createFileRoute("/api/public/ingest")({
         }
 
         if (readings.length === 0 && chemicalSwitchReadings.length === 0 && chemicalCounterReadings.length === 0) {
-          if (stale > 0) return json({ ok: true, accepted: 0, stale });
+          if (stale > 0) return json({ ok: true, accepted: 0, stale, ...extra });
           return json({ error: "No matching meters", unknown }, 400);
         }
 
@@ -319,7 +354,8 @@ export const Route = createFileRoute("/api/public/ingest")({
         return json({ 
           ok: true, 
           accepted: readings.length,
-          stale, 
+          stale,
+          ...extra,
           chemical_events: chemicalEvents,
           unknown 
         });

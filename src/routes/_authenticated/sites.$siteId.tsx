@@ -51,7 +51,7 @@ interface ChemLowEvent {
 function SiteDetail() {
   const { siteId } = Route.useParams();
   const navigate = useNavigate();
-  const [site, setSite] = useState<{ name: string; location: string | null; machine_type: string | null; fresh_water_daily_threshold_liters: number | null; primary_color: string | null; secondary_color: string | null; accent_color: string | null } | null>(null);
+  const [site, setSite] = useState<{ name: string; location: string | null; machine_type: string | null; fresh_water_daily_threshold_liters: number | null; primary_color: string | null; secondary_color: string | null; accent_color: string | null; device_status?: any; device_seen_at?: string | null } | null>(null);
   const [meters, setMeters] = useState<Meter[]>([]);
   const [readings, setReadings] = useState<Reading[]>([]);
   const [totals, setTotals] = useState<Record<string, number>>({});
@@ -114,7 +114,7 @@ function SiteDetail() {
 
   const load = async () => {
     const [{ data: s }, { data: m }, { data: apiKeys }] = await Promise.all([
-      supabase.from("sites").select("name,location,machine_type,fresh_water_daily_threshold_liters,primary_color,secondary_color,accent_color").eq("id", siteId).single(),
+      supabase.from("sites").select("name,location,machine_type,fresh_water_daily_threshold_liters,primary_color,secondary_color,accent_color,device_status,device_seen_at").eq("id", siteId).single(),
       supabase
         .from("site_meters")
         .select("id,meter_type,name,unit,capacity,low_threshold,device_key,position,chemical_group,sensor_type,count_for_avg_water,machine_id")
@@ -561,6 +561,21 @@ function SiteDetail() {
           </div>
         </div>
       </div>
+
+      {/* Board reports it's running but can't read the HMI (update-capable sketch only) */}
+      {site.device_status?.hmi_ok === false && site.device_seen_at &&
+        Date.now() - new Date(site.device_seen_at).getTime() < 30 * 60 * 1000 && (
+        <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm flex items-start gap-2">
+          <AlertTriangle className="h-4 w-4 text-amber-600 mt-0.5 shrink-0" />
+          <div>
+            <span className="font-semibold">Board is online but can't read the HMI.</span>{" "}
+            <span className="text-muted-foreground">
+              It's reading {site.device_status.meters_ok ?? 0} of {site.device_status.meters_total ?? "?"} meters.
+              Check the HMI is on and its IP address and Modbus mapping table are correct.
+            </span>
+          </div>
+        </div>
+      )}
 
       {/* Machine tabs (multi-machine sites only) */}
       {machines.length > 0 && (

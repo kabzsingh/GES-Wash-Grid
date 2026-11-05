@@ -36,6 +36,11 @@ interface Site {
   machine_type?: string | null;
   poll_interval_seconds?: number;
   pulse_forward_url?: string | null;
+  device_status?: Record<string, any> | null;
+  device_seen_at?: string | null;
+  firmware_version?: string | null;
+  firmware_path?: string | null;
+  firmware_uploaded_at?: string | null;
 }
 interface Meter { id: string; site_id: string; meter_type: "wash"|"fresh_water"|"chemical"|"chemical_flow"; name: string; unit: string; capacity: number | null; low_threshold: number | null; device_key: string; position: number; chemical_group: string | null; modbus_address: number | null; sensor_type: "switch" | "probe" | "counter"; count_for_avg_water: boolean; machine_id?: string | null }
 // A wash machine at a site, with its own HMI. Sites without machines use one HMI for all meters.
@@ -1270,6 +1275,10 @@ function SiteAdminCard({
         </div>
 
         <div className="pt-4 border-t border-border/60">
+          <FirmwareSettings site={site} />
+        </div>
+
+        <div className="pt-4 border-t border-border/60">
           <WaterAlertSettings site={site} onSaved={() => { /* parent will refetch on next mount */ }} />
         </div>
 
@@ -1281,6 +1290,108 @@ function SiteAdminCard({
           <ReportSettings site={site} onSaved={() => { /* parent will refetch on next mount */ }} />
         </div>
       </div>
+    </div>
+  );
+}
+
+// Remote update (OTA). The board reports its firmware version with each send;
+// when this site's target version differs, the dashboard offers the uploaded
+// .bin to the board with a short-lived signed link, and the board updates
+// itself. Only boards running an OTA-capable sketch can do this.
+function FirmwareSettings({ site }: { site: Site }) {
+  const [version, setVersion] = useState("");
+  const [file, setFile] = useState<File | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [target, setTarget] = useState({ version: site.firmware_version ?? null, at: site.firmware_uploaded_at ?? null });
+  const dev = site.device_status as any;
+  const seen = site.device_seen_at ? new Date(site.device_seen_at) : null;
+  const updated = target.version && dev?.fw === target.version;
+
+  const upload = async () => {
+    const v = version.trim();
+    if (!/^[A-Za-z0-9._-]{1,40}$/.test(v)) { toast.error("Version: letters, numbers, dots, dashes only (e.g. 2.0.1)"); return; }
+    if (!file || !file.name.toLowerCase().endsWith(".bin")) { toast.error("Choose the compiled .bin file"); return; }
+    if (file.size < 100_000 || file.size > 4_000_000) { toast.error("That doesn't look like an ESP32 firmware file (size)"); return; }
+    if (v === dev?.fw) { toast.error("The board already reports this version. Use a new version number."); return; }
+    setBusy(true);
+    const path = `${site.id}/${v}.bin`;
+    const { error: upErr } = await supabase.storage.from("firmware").upload(path, file, { upsert: true, contentType: "application/octet-stream" });
+    if (upErr) { setBusy(false); toast.error(upErr.message); return; }
+    const at = new Date().toISOString();
+    const { error } = await supabase.from("sites").update({ firmware_version: v, firmware_path: path, firmware_uploaded_at: at } as any).eq("id", site.id);
+    setBusy(false);
+    if (error) { toast.error(error.message); return; }
+    setTarget({ version: v, at }); setVersion(""); setFile(null);
+    toast.success(`Version ${v} uploaded. The board will update at its next send (within about 10 minutes).`);
+  };
+
+  const cancel = async () => {
+    if (!confirm("Cancel the pending update? The board stays on the version it has.")) return;
+    const { error } = await supabase.from("sites").update({ firmware_version: null, firmware_path: null } as any).eq("id", site.id);
+    if (error) { toast.error(error.message); return; }
+    setTarget({ version: null, at: null });
+    toast.success("Update cancelled");
+  };
+
+  return (
+    <div>
+      <div className="flex items-center gap-3 mb-3">
+        <div className="h-8 w-8 rounded bg-muted flex items-center justify-center">
+          <Cpu className="h-4 w-4 text-muted-foreground" />
+        </div>
+        <div>
+          <h4 className="text-sm font-bold uppercase tracking-widest text-muted-foreground">Board &amp; remote update</h4>
+          <p className="text-[10px] text-muted-foreground mt-0.5">
+            Boards running an update-capable sketch report their health here, and update themselves when you upload a new version.
+          </p>
+        </div>
+      </div>
+
+      <div className="rounded-lg border border-border bg-background p-3 max-w-xl text-xs space-y-1">
+        {dev ? (
+          <>
+            <div className="flex flex-wrap gap-x-4 gap-y-1">
+              <span><span className="text-muted-foreground">Firmware</span> <span className="font-mono font-semibold">{dev.fw ?? "?"}</span></span>
+              {dev.rssi != null && <span><span className="text-muted-foreground">WiFi</span> {dev.rssi} dBm</span>}
+              {dev.uptime_s != null && <span><span className="text-muted-foreground">Up</span> {dev.uptime_s >= 86400 ? `${Math.floor(dev.uptime_s / 86400)}d ` : ""}{Math.floor((dev.uptime_s % 86400) / 3600)}h {Math.floor((dev.uptime_s % 3600) / 60)}m</span>}
+              {dev.reset && <span><span className="text-muted-foreground">Last restart</span> {dev.reset}</span>}
+            </div>
+            <div className="flex flex-wrap gap-x-4 gap-y-1">
+              {dev.hmi_ok != null && (
+                <span className={dev.hmi_ok ? "text-emerald-600" : "text-destructive font-semibold"}>
+                  {dev.hmi_ok ? "HMI OK" : "Can't read the HMI"}{dev.meters_total ? ` (${dev.meters_ok ?? 0}/${dev.meters_total} meters)` : ""}
+                </span>
+              )}
+              {dev.queued != null && <span><span className="text-muted-foreground">Waiting to send</span> {dev.queued}</span>}
+              {seen && <span className="text-muted-foreground">Reported {seen.toLocaleString()}</span>}
+            </div>
+          </>
+        ) : (
+          <p className="text-muted-foreground italic">No health report yet. The board needs the update-capable sketch.</p>
+        )}
+      </div>
+
+      {target.version && (
+        <div className={`mt-2 max-w-xl text-xs rounded-lg border p-2 flex items-center justify-between gap-2 ${updated ? "border-emerald-500/30 bg-emerald-500/5" : "border-amber-500/30 bg-amber-500/5"}`}>
+          <span>
+            {updated
+              ? <>✓ Board is running <span className="font-mono font-semibold">{target.version}</span></>
+              : <>Update to <span className="font-mono font-semibold">{target.version}</span> waiting for the board{target.at ? ` (uploaded ${new Date(target.at).toLocaleString()})` : ""}</>}
+          </span>
+          {!updated && <Button size="sm" variant="outline" className="h-7 text-[11px]" onClick={cancel}>Cancel update</Button>}
+        </div>
+      )}
+
+      <div className="mt-3 flex flex-col sm:flex-row gap-2 max-w-xl">
+        <Input value={version} onChange={(e) => setVersion(e.target.value)} placeholder="New version, e.g. 2.0.1" className="h-9 text-xs font-mono sm:w-40" />
+        <Input type="file" accept=".bin" onChange={(e) => setFile(e.target.files?.[0] ?? null)} className="h-9 text-xs" />
+        <Button size="sm" onClick={upload} disabled={busy} className="h-9 text-xs font-bold shrink-0">
+          {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Upload update"}
+        </Button>
+      </div>
+      <p className="mt-1.5 text-[10px] text-muted-foreground max-w-xl">
+        The version must match the FW_VERSION line in the sketch you compiled. In Arduino IDE: Sketch → Export Compiled Binary, then upload the .bin (not the "merged" one).
+      </p>
     </div>
   );
 }
